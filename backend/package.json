@@ -1,0 +1,18 @@
+{
+  "name": "jb-printful-creator-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "deploy": "gcloud run deploy jb-printful-creator --source . --project printful-manager --region us-east1 --allow-unauthenticated"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "cors": "^2.8.5",
+    "multer": "^1.4.5-lts.1",
+    "sharp": "^0.33.5"
+  }
+}
