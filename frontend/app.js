@@ -1,5 +1,6 @@
+const BACKEND = 'https://jb-printful-creator-915738985818.us-east1.run.app';
 const state = {
-  backend: localStorage.getItem('jb-backend') || '',
+  backend: BACKEND,
   pass: localStorage.getItem('jb-pass') || '',
   catalog: [],
   selected: new Map(),  // catalog_id -> product
@@ -28,17 +29,15 @@ async function api(path, opts = {}) {
 }
 
 // ---------- LOGIN ----------
-$('#backend-url').value = state.backend;
 $('#password').value = state.pass;
 
-$('#login-btn').onclick = async () => {
-  state.backend = $('#backend-url').value.trim().replace(/\/$/, '');
+async function doLogin() {
   state.pass = $('#password').value;
+  if (!state.pass) return;
   $('#login-msg').textContent = 'Connecting...';
   $('#login-msg').className = 'msg';
   try {
     const cat = await api('/api/catalog');
-    localStorage.setItem('jb-backend', state.backend);
     localStorage.setItem('jb-pass', state.pass);
     state.catalog = cat.items;
     $('#login').hidden = true;
@@ -46,12 +45,14 @@ $('#login-btn').onclick = async () => {
     $('#auth-status').textContent = `${state.catalog.length} catalog items loaded`;
     renderCatalog();
   } catch (e) {
-    $('#login-msg').textContent = e.message;
+    $('#login-msg').textContent = 'Login failed: ' + e.message;
     $('#login-msg').className = 'msg error';
   }
-};
+}
+$('#login-btn').onclick = doLogin;
+$('#password').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 
-if (state.backend && state.pass) $('#login-btn').click();
+if (state.pass) doLogin();
 
 // ---------- STEP NAV ----------
 $$('.steps button').forEach(b => {
