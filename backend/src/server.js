@@ -3,8 +3,9 @@ import cors from 'cors';
 import multer from 'multer';
 import { pf } from './printful.js';
 import { memo } from './cache.js';
-import { classifyPlacements, buildShoePanel, fitToCanvas } from './wrap.js';
+import { classifyPlacements, buildShoeFiles, fitToCanvas, dimsFromPrintfiles } from './wrap.js';
 import { createJob, getJob, emit, subscribe } from './jobs.js';
+import { attachShopRoutes } from './shop.js';
 
 const PORT = parseInt(process.env.PORT || '8080');
 const TOKEN = process.env.PRINTFUL_TOKEN;
@@ -23,6 +24,8 @@ app.use(express.json({ limit: '4mb' }));
 
 app.use((req, res, next) => {
   if (req.path === '/health') return next();
+  // Approve/deny links open from email — no password header possible
+  if (req.path.startsWith('/api/shop/approve/') || req.path.startsWith('/api/shop/deny/')) return next();
   const pass = req.header('x-jb-pass');
   if (pass !== APP_PASSWORD) return res.status(401).json({ error: 'unauthorized' });
   next();
@@ -123,6 +126,67 @@ app.get('/api/jobs/:id/stream', (req, res) => {
   req.on('close', unsub);
 });
 
+async function fetchPatternBuf(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`fetch pattern ${res.status}`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
+async function uploadBufferToPrintful(buf, filename) {
+  const dataUrl = `data:image/png;base64,${buf.toString('base64')}`;
+  const r = await printful.post('/files', { type: 'default', url: dataUrl, filename, visible: true });
+  if (r.status !== 200) throw new Error('upload failed: ' + JSON.stringify(r.body).slice(0, 300));
+  return { id: r.body.result.id, url: r.body.result.preview_url || r.body.result.url };
+}
+
+async function getCatalogDetail(catalogId) {
+  return memo(`catalog-detail:${catalogId}`, 24 * 60 * 60 * 1000, async () => {
+    const [info, pfRes] = await Promise.all([
+      printful.get(`/products/${catalogId}`),
+      printful.get(`/mockup-generator/printfiles/${catalogId}`),
+    ]);
+    const pf = pfRes.body?.result || {};
+    const placementNames = Object.keys(pf.available_placements || {});
+    return {
+      info: info.body?.result || null,
+      placementNames,
+      dims: dimsFromPrintfiles(pf),
+      wrap: classifyPlacements(placementNames),
+    };
+  });
+}
+
+async function buildFilesForVariant(prod, pat, detail) {
+  if (detail.wrap.kind === 'canvas-shoe') {
+    const cacheKey = `shoe-build:${prod.id}:${pat.fileId}`;
+    return memo(cacheKey, 60 * 60 * 1000, async () => {
+      const patternBuf = await fetchPatternBuf(pat.url);
+      const built = await buildShoeFiles(patternBuf, {
+        quarter: detail.dims.shoe_quarters_left || { width: 2250, height: 2250 },
+        tongue:  detail.dims.shoe_tongue_left   || { width: 2250, height: 2250 },
+      });
+      const safeName = (pat.label || 'pattern').replace(/[^a-z0-9]+/gi, '_');
+      const [left, right, tongue] = await Promise.all([
+        uploadBufferToPrintful(built.quarters_left,  `${safeName}_quarters_left.png`),
+        uploadBufferToPrintful(built.quarters_right, `${safeName}_quarters_right.png`),
+        built.tongue ? uploadBufferToPrintful(built.tongue, `${safeName}_tongue.png`) : null,
+      ]);
+      const files = [
+        { type: 'shoe_quarters_left',  id: left.id },
+        { type: 'shoe_quarters_right', id: right.id },
+      ];
+      if (tongue) {
+        files.push({ type: 'shoe_tongue_left',  id: tongue.id });
+        files.push({ type: 'shoe_tongue_right', id: tongue.id });
+      }
+      return files;
+    });
+  }
+  // single-placement default fallback
+  const primary = detail.placementNames[0] || 'default';
+  return [{ type: primary, id: pat.fileId }];
+}
+
 async function runJob(job) {
   job.status = 'running';
   emit(job, { type: 'start', total: job.spec.products.length * job.spec.patterns.length });
@@ -133,22 +197,14 @@ async function runJob(job) {
       const label = `${prod.title || prod.id} / ${pat.label}`;
       emit(job, { type: 'item-start', label });
       try {
-        const detail = await memo(`product:${prod.id}`, 24 * 60 * 60 * 1000, async () => {
-          const [info, printfiles] = await Promise.all([
-            printful.get(`/products/${prod.id}`),
-            printful.get(`/mockup-generator/printfiles/${prod.id}`),
-          ]);
-          return {
-            info: info.body?.result || null,
-            placements: printfiles.body?.result?.printfiles || [],
-          };
-        });
+        const detail = await getCatalogDetail(prod.id);
+        emit(job, { type: 'item-info', label, wrap: detail.wrap.kind, placements: detail.placementNames });
         const variants = detail.info?.variants || [];
-        const primary = detail.placements[0];
+        const files = await buildFilesForVariant(prod, pat, detail);
         const sync_variants = variants.map(v => ({
           variant_id: v.id,
           retail_price: retailPrices[prod.id] || prod.retail || '29.00',
-          files: [{ type: primary?.placement || 'default', id: pat.fileId }],
+          files,
         }));
         const name = `${prod.title || `Product ${prod.id}`} - ${pat.label}`;
         const r = await printful.post('/store/products', {
@@ -157,8 +213,8 @@ async function runJob(job) {
         });
         if (r.status === 200) {
           const id = r.body.result?.id;
-          job.items.push({ label, ok: true, sync_id: id });
-          emit(job, { type: 'item-ok', label, sync_id: id });
+          job.items.push({ label, ok: true, sync_id: id, wrap: detail.wrap.kind });
+          emit(job, { type: 'item-ok', label, sync_id: id, wrap: detail.wrap.kind });
         } else {
           job.items.push({ label, ok: false, error: r.body });
           emit(job, { type: 'item-fail', label, error: r.body });
@@ -175,6 +231,8 @@ async function runJob(job) {
   emit(job, { type: 'done', items: job.items });
 }
 
+attachShopRoutes(app, printful);
+
 app.listen(PORT, () => console.log(`jb-printful-api listening on :${PORT}`));
 
-export { app, buildShoePanel, fitToCanvas };
+export { app, buildShoeFiles, fitToCanvas };
