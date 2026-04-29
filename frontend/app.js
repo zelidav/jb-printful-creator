@@ -4,6 +4,7 @@ const state = {
   pass: localStorage.getItem('jb-pass') || '',
   catalog: [],
   selected: new Map(),  // catalog_id -> product
+  logo: null,           // { label, dataUrl, fileId, url }
   patterns: [],         // [{ label, file, dataUrl, fileId, url }]
   wrapInfo: new Map(),  // catalog_id -> { wrap, placements, templates }
   wrapChoices: new Map(), // catalog_id -> 'tile' | 'mirror' | 'separate'
@@ -101,8 +102,43 @@ $('#catalog-search').oninput = () => {
   catalogTimer = setTimeout(renderCatalog, 150);
 };
 
-// ---------- PATTERNS ----------
+// ---------- PATTERNS + LOGO ----------
+async function uploadOne(file) {
+  const fd = new FormData(); fd.append('file', file);
+  return api('/api/upload', { method: 'POST', body: fd });
+}
+
+function renderLogoSlot() {
+  const wrap = $('#logo-slot');
+  wrap.innerHTML = '';
+  const slot = document.createElement('div');
+  slot.className = 'pattern-slot' + (state.logo ? ' filled' : '');
+  if (state.logo) {
+    slot.innerHTML = `
+      <img src="${state.logo.dataUrl}">
+      <input type="text" value="${state.logo.label}" placeholder="Logo label">
+      <button>Remove</button>`;
+    slot.querySelector('input').oninput = e => { state.logo.label = e.target.value; };
+    slot.querySelector('button').onclick = () => { state.logo = null; renderLogoSlot(); };
+  } else {
+    slot.innerHTML = `<div class="hint">Drop or pick a logo (PNG with transparent bg works best)</div><input type="file" accept="image/*">`;
+    slot.querySelector('input').onchange = async e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const dataUrl = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(file); });
+      slot.querySelector('.hint').textContent = 'Uploading logo...';
+      try {
+        const r = await uploadOne(file);
+        state.logo = { label: file.name.replace(/\.[^.]+$/, ''), dataUrl, fileId: r.id, url: r.url };
+        renderLogoSlot();
+      } catch (err) { slot.querySelector('.hint').textContent = 'Upload failed: ' + err.message; }
+    };
+  }
+  wrap.appendChild(slot);
+}
+
 function renderPatterns() {
+  renderLogoSlot();
   const wrap = $('#pattern-slots');
   wrap.innerHTML = '';
   for (let i = 0; i < 3; i++) {
@@ -124,8 +160,7 @@ function renderPatterns() {
         const dataUrl = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(file); });
         slot.querySelector('.hint').textContent = 'Uploading...';
         try {
-          const fd = new FormData(); fd.append('file', file);
-          const r = await api('/api/upload', { method: 'POST', body: fd });
+          const r = await uploadOne(file);
           state.patterns.push({ label: file.name.replace(/\.[^.]+$/, ''), file, dataUrl, fileId: r.id, url: r.url });
           renderPatterns();
         } catch (err) { slot.querySelector('.hint').textContent = 'Upload failed: ' + err.message; }
@@ -197,7 +232,9 @@ async function renderReview() {
 $('#start-btn').onclick = async () => {
   const sel = Array.from(state.selected.values());
   const pats = state.patterns.filter(p => p.fileId);
-  if (!sel.length || !pats.length) return alert('Select products and upload patterns first');
+  if (!sel.length) return alert('Select at least one product');
+  if (!pats.length) return alert('Upload at least one pattern');
+  if (!state.logo?.fileId) return alert('Upload a logo (required)');
 
   $$('.steps button').forEach(x => x.classList.remove('active'));
   $$('.step').forEach(x => x.classList.remove('active'));
@@ -212,6 +249,7 @@ $('#start-btn').onclick = async () => {
     body: JSON.stringify({
       products: sel.map(p => ({ id: p.id, title: p.title })),
       patterns: pats.map(p => ({ label: p.label, fileId: p.fileId, url: p.url })),
+      logo: { label: state.logo.label, fileId: state.logo.fileId, url: state.logo.url },
       wrapChoices: Object.fromEntries(state.wrapChoices),
     }),
   });
