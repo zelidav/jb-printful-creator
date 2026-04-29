@@ -77,7 +77,7 @@ function renderCatalog() {
   $('#selected-count').textContent = state.selected.size;
   const grid = $('#catalog-grid');
   grid.innerHTML = '';
-  filtered.slice(0, 200).forEach(p => {
+  filtered.forEach(p => {
     const card = document.createElement('div');
     card.className = 'product-card' + (state.selected.has(p.id) ? ' selected' : '');
     card.innerHTML = `
