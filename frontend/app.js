@@ -242,8 +242,9 @@ async function pollJob(id, total) {
       }).join('')}</div>`;
     if (j.status === 'done' || j.status === 'error') {
       const okItems = j.items.filter(i => i.ok);
-      $('#results').innerHTML = `<h3>Done — ${okItems.length}/${j.items.length} created</h3>
-        <ul>${okItems.map(i => `<li>${i.label} → <a target="_blank" href="https://www.printful.com/dashboard/sync/${i.sync_id}">#${i.sync_id}</a></li>`).join('')}</ul>`;
+      $('#results').innerHTML = `<h3>Done — ${okItems.length}/${j.items.length} templates created</h3>
+        <p class="muted">Saved as templates (is_ignored=true) — they sit in your Printful dashboard but won't appear in any storefront. Review and apply when ready.</p>
+        <ul>${okItems.map(i => `<li><strong>${i.product_title || 'Product'}</strong> — ${i.label} → <a target="_blank" href="https://www.printful.com/dashboard/products/${i.sync_id}">#${i.sync_id}</a>${i.wrap && i.wrap !== 'single' ? ` <span class="badge wrap">${i.wrap}</span>` : ''}</li>`).join('')}</ul>`;
       break;
     }
     await new Promise(r => setTimeout(r, 2500));
