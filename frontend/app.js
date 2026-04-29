@@ -68,32 +68,55 @@ $$('.steps button').forEach(b => {
 });
 
 // ---------- CATALOG ----------
+function makeProductCard(p) {
+  const card = document.createElement('div');
+  card.className = 'product-card' + (state.selected.has(p.id) ? ' selected' : '');
+  card.innerHTML = `
+    <img loading="lazy" src="${p.image || ''}" alt="">
+    <div class="meta">
+      <div class="title">${p.title || 'Untitled'}</div>
+      <div class="brand">${p.brand || ''}</div>
+      <span class="badge">#${p.id}</span>
+    </div>`;
+  card.onclick = () => {
+    if (state.selected.has(p.id)) state.selected.delete(p.id);
+    else state.selected.set(p.id, p);
+    renderCatalog();
+  };
+  return card;
+}
+
 function renderCatalog() {
   const q = $('#catalog-search').value.toLowerCase();
   const filtered = q
-    ? state.catalog.filter(p => (p.title || '').toLowerCase().includes(q) || (p.brand || '').toLowerCase().includes(q))
+    ? state.catalog.filter(p => (p.title || '').toLowerCase().includes(q) || (p.brand || '').toLowerCase().includes(q) || (p.type || '').toLowerCase().includes(q))
     : state.catalog;
   $('#catalog-count').textContent = filtered.length;
   $('#selected-count').textContent = state.selected.size;
   const grid = $('#catalog-grid');
   grid.innerHTML = '';
-  filtered.forEach(p => {
-    const card = document.createElement('div');
-    card.className = 'product-card' + (state.selected.has(p.id) ? ' selected' : '');
-    card.innerHTML = `
-      <img loading="lazy" src="${p.image || ''}" alt="">
-      <div class="meta">
-        <div class="title">${p.title || 'Untitled'}</div>
-        <div class="brand">${p.brand || ''}</div>
-        <span class="badge">#${p.id}</span>
-      </div>`;
-    card.onclick = () => {
-      if (state.selected.has(p.id)) state.selected.delete(p.id);
-      else state.selected.set(p.id, p);
-      renderCatalog();
-    };
-    grid.appendChild(card);
-  });
+
+  if (q) {
+    // search: flat results, no grouping
+    filtered.forEach(p => grid.appendChild(makeProductCard(p)));
+    return;
+  }
+
+  // group by product type, largest groups first
+  const groups = new Map();
+  for (const p of filtered) {
+    const t = (p.type || 'Other').toUpperCase();
+    if (!groups.has(t)) groups.set(t, []);
+    groups.get(t).push(p);
+  }
+  const sorted = [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
+  for (const [type, items] of sorted) {
+    const header = document.createElement('div');
+    header.className = 'catalog-group';
+    header.textContent = `${type} · ${items.length}`;
+    grid.appendChild(header);
+    items.forEach(p => grid.appendChild(makeProductCard(p)));
+  }
 }
 
 let catalogTimer;

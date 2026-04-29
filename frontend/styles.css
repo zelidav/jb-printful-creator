@@ -32,6 +32,7 @@ main { padding: 0 24px 40px; }
 .bar input { flex: 1; padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; color: var(--fg); font: inherit; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+.catalog-group { grid-column: 1 / -1; padding: 20px 4px 6px; font-size: 13px; font-weight: 600; color: var(--accent-2); text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--line); }
 .product-card { background: var(--panel); border: 2px solid var(--line); border-radius: 8px; overflow: hidden; cursor: pointer; transition: all 0.12s; }
 .product-card:hover { border-color: var(--accent-2); }
 .product-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
