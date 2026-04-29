@@ -416,8 +416,8 @@ async function pollJob(id, total) {
       }).join('')}</div>`;
     if (j.status === 'done' || j.status === 'error') {
       const okItems = j.items.filter(i => i.ok);
-      $('#results').innerHTML = `<h3>Done — ${okItems.length}/${j.items.length} templates created</h3>
-        <p class="muted">Saved as templates (is_ignored=true) — sit in your Printful dashboard, not on any storefront. Hero image is the auto-generated lifestyle mockup. Review and publish when ready.</p>
+      $('#results').innerHTML = `<h3>Done — ${okItems.length}/${j.items.length} templates saved</h3>
+        <p class="muted">Saved to your Printful library, not on any storefront. <a href="templates.html" style="color:var(--accent);">→ Go to Templates</a> to review, edit, and publish to a store when ready.</p>
         <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(220px, 1fr))">
           ${okItems.map(i => `
             <div class="product-card">
