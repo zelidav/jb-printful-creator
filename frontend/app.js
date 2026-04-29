@@ -243,8 +243,20 @@ async function pollJob(id, total) {
     if (j.status === 'done' || j.status === 'error') {
       const okItems = j.items.filter(i => i.ok);
       $('#results').innerHTML = `<h3>Done — ${okItems.length}/${j.items.length} templates created</h3>
-        <p class="muted">Saved as templates (is_ignored=true) — they sit in your Printful dashboard but won't appear in any storefront. Review and apply when ready.</p>
-        <ul>${okItems.map(i => `<li><strong>${i.product_title || 'Product'}</strong> — ${i.label} → <a target="_blank" href="https://www.printful.com/dashboard/products/${i.sync_id}">#${i.sync_id}</a>${i.wrap && i.wrap !== 'single' ? ` <span class="badge wrap">${i.wrap}</span>` : ''}</li>`).join('')}</ul>`;
+        <p class="muted">Saved as templates (is_ignored=true) — sit in your Printful dashboard, not on any storefront. Hero image is the auto-generated lifestyle mockup. Review and publish when ready.</p>
+        <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(220px, 1fr))">
+          ${okItems.map(i => `
+            <div class="product-card">
+              <img loading="lazy" src="${i.thumbnail || ''}" alt="">
+              <div class="meta">
+                <div class="title">${i.product_title || 'Product'}</div>
+                <div class="brand">${i.label}</div>
+                <a target="_blank" href="https://www.printful.com/dashboard/products/${i.sync_id}" class="badge">#${i.sync_id} →</a>
+                ${i.placements ? `<span class="badge" title="${i.placements.join(', ')}">${i.placements.length} panel${i.placements.length>1?'s':''}</span>` : ''}
+                ${i.wrap && i.wrap !== 'single' ? ` <span class="badge wrap">${i.wrap}</span>` : ''}
+              </div>
+            </div>`).join('')}
+        </div>`;
       break;
     }
     await new Promise(r => setTimeout(r, 2500));
