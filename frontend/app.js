@@ -56,16 +56,16 @@ $('#password').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin
 if (state.pass) doLogin();
 
 // ---------- STEP NAV ----------
-$$('.steps button').forEach(b => {
-  b.onclick = () => {
-    $$('.steps button').forEach(x => x.classList.remove('active'));
-    $$('.step').forEach(x => x.classList.remove('active'));
-    b.classList.add('active');
-    $('#step-' + b.dataset.step).classList.add('active');
-    if (b.dataset.step === 'patterns') renderPatterns();
-    if (b.dataset.step === 'review') renderReview();
-  };
-});
+function goToStep(name) {
+  $$('.steps button').forEach(x => x.classList.remove('active'));
+  $$('.step').forEach(x => x.classList.remove('active'));
+  $$('.steps button').forEach(b => { if (b.dataset.step === name) b.classList.add('active'); });
+  $('#step-' + name).classList.add('active');
+  if (name === 'patterns') renderPatterns();
+  if (name === 'review') renderReview();
+}
+$$('.steps button').forEach(b => { b.onclick = () => goToStep(b.dataset.step); });
+document.addEventListener('click', e => { if (e.target?.id === 'next-fab') goToStep('patterns'); });
 
 // ---------- CATALOG ----------
 function makeProductCard(p) {
@@ -86,6 +86,50 @@ function makeProductCard(p) {
   return card;
 }
 
+// Map raw product fields → friendly group names
+function friendlyGroup(p) {
+  const title = (p.title || '').toLowerCase();
+  const type = (p.type || '').toLowerCase();
+  const all = title + ' ' + type;
+
+  if (/sock|underwear|brief|boxer|panty|thong|bra|undergarment/.test(all)) return 'Undergarments';
+  if (/short|biker|jogger/.test(all)) return 'Shorts & Bottoms';
+  if (/legging|tights|pant|sweatpant/.test(all)) return 'Shorts & Bottoms';
+  if (/tee|t-shirt|tank|polo|long.?sleeve|jersey|shirt/.test(all)) return 'Shirts';
+  if (/hoodie|sweatshirt|sweater|crewneck|fleece/.test(all)) return 'Hoodies & Sweatshirts';
+  if (/dress|skirt|jumpsuit|romper/.test(all)) return 'Dresses & Skirts';
+  if (/shoe|sneaker|slip-on|boot|sandal|flip|flop|footwear/.test(all)) return 'Shoes';
+  if (/hat|cap|beanie|visor|bucket/.test(all)) return 'Hats';
+  if (/bag|tote|backpack|fanny|pouch|duffle/.test(all)) return 'Bags';
+  if (/phone|case|sleeve|laptop|tablet|airpod|ipad/.test(all)) return 'Tech & Cases';
+  if (/mug|bottle|tumbler|drinkware|cup/.test(all)) return 'Drinkware';
+  if (/towel|blanket|throw|pillow|cushion|cover/.test(all)) return 'Home Textiles';
+  if (/poster|canvas|sticker|magnet|notebook|journal|mousepad|mouse pad|coaster|notepad|wall.?art/.test(all)) return 'Decor & Stationery';
+  if (/jewelry|necklace|earring|bracelet|ring|chain|charm|pin/.test(all)) return 'Jewelry & Pins';
+  if (/wallet|keychain|lanyard|bandana|scrunchie|scarf|gloves|belt/.test(all)) return 'Accessories';
+  if (/baby|infant|kid|youth|toddler|onesie/.test(all)) return 'Kids & Baby';
+  return 'Other';
+}
+
+const GROUP_ORDER = [
+  'Shirts',
+  'Hoodies & Sweatshirts',
+  'Shorts & Bottoms',
+  'Dresses & Skirts',
+  'Undergarments',
+  'Shoes',
+  'Hats',
+  'Bags',
+  'Tech & Cases',
+  'Drinkware',
+  'Home Textiles',
+  'Jewelry & Pins',
+  'Accessories',
+  'Kids & Baby',
+  'Decor & Stationery',
+  'Other',
+];
+
 function renderCatalog() {
   const q = $('#catalog-search').value.toLowerCase();
   const filtered = q
@@ -96,24 +140,38 @@ function renderCatalog() {
   const grid = $('#catalog-grid');
   grid.innerHTML = '';
 
+  // Floating Next button (only show if selected > 0)
+  $('#next-fab').hidden = state.selected.size === 0;
+  $('#next-fab').textContent = `Next: Patterns & Logo (${state.selected.size}) →`;
+
   if (q) {
-    // search: flat results, no grouping
     filtered.forEach(p => grid.appendChild(makeProductCard(p)));
     return;
   }
 
-  // group by product type, largest groups first
   const groups = new Map();
   for (const p of filtered) {
-    const t = (p.type || 'Other').toUpperCase();
-    if (!groups.has(t)) groups.set(t, []);
-    groups.get(t).push(p);
+    const g = friendlyGroup(p);
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(p);
   }
-  const sorted = [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
-  for (const [type, items] of sorted) {
+  // Render in our defined order, then any leftovers
+  const seen = new Set();
+  for (const name of GROUP_ORDER) {
+    if (!groups.has(name)) continue;
+    seen.add(name);
+    const items = groups.get(name);
     const header = document.createElement('div');
     header.className = 'catalog-group';
-    header.textContent = `${type} · ${items.length}`;
+    header.textContent = `${name} · ${items.length}`;
+    grid.appendChild(header);
+    items.forEach(p => grid.appendChild(makeProductCard(p)));
+  }
+  for (const [name, items] of groups) {
+    if (seen.has(name)) continue;
+    const header = document.createElement('div');
+    header.className = 'catalog-group';
+    header.textContent = `${name} · ${items.length}`;
     grid.appendChild(header);
     items.forEach(p => grid.appendChild(makeProductCard(p)));
   }
