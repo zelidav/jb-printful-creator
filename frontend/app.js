@@ -4,8 +4,9 @@ const state = {
   pass: localStorage.getItem('jb-pass') || '',
   catalog: [],
   selected: new Map(),  // catalog_id -> product
-  logo: null,           // { label, dataUrl, fileId, url }
-  patterns: [],         // [{ label, file, dataUrl, fileId, url }]
+  designs: [           // up to 3 designs, each with a pattern + matching logo
+    { label: '', pattern: null, logo: null },
+  ],
   wrapInfo: new Map(),  // catalog_id -> { wrap, placements, templates }
   wrapChoices: new Map(), // catalog_id -> 'tile' | 'mirror' | 'separate'
 };
@@ -183,78 +184,127 @@ $('#catalog-search').oninput = () => {
   catalogTimer = setTimeout(renderCatalog, 150);
 };
 
-// ---------- PATTERNS + LOGO ----------
+// ---------- DESIGN SLOTS (pattern + logo per design) ----------
 async function uploadOne(file) {
   const fd = new FormData(); fd.append('file', file);
   return api('/api/upload', { method: 'POST', body: fd });
 }
 
-function renderLogoSlot() {
-  const wrap = $('#logo-slot');
-  wrap.innerHTML = '';
-  const slot = document.createElement('div');
-  slot.className = 'pattern-slot' + (state.logo ? ' filled' : '');
-  if (state.logo) {
-    slot.innerHTML = `
-      <img src="${state.logo.dataUrl}">
-      <input type="text" value="${state.logo.label}" placeholder="Logo label">
-      <button>Remove</button>`;
-    slot.querySelector('input').oninput = e => { state.logo.label = e.target.value; };
-    slot.querySelector('button').onclick = () => { state.logo = null; renderLogoSlot(); };
-  } else {
-    slot.innerHTML = `<div class="hint">Drop or pick a logo (PNG with transparent bg works best)</div><input type="file" accept="image/*">`;
-    slot.querySelector('input').onchange = async e => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const dataUrl = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(file); });
-      slot.querySelector('.hint').textContent = 'Uploading logo...';
-      try {
-        const r = await uploadOne(file);
-        state.logo = { label: file.name.replace(/\.[^.]+$/, ''), dataUrl, fileId: r.id, url: r.url };
-        renderLogoSlot();
-      } catch (err) { slot.querySelector('.hint').textContent = 'Upload failed: ' + err.message; }
-    };
+function dpiClass(dim, role) {
+  // role: 'pattern' (needs ~2000) or 'logo' (needs ~800)
+  const min = role === 'logo' ? 800 : 2000;
+  const ok  = role === 'logo' ? 1500 : 3000;
+  if (!dim) return '';
+  const m = Math.min(dim.w, dim.h);
+  if (m >= ok) return '';
+  if (m >= min) return 'warn';
+  return 'bad';
+}
+
+function dpiNote(dim, role) {
+  if (!dim) return '';
+  const cls = dpiClass(dim, role);
+  if (!cls) return `${dim.w}×${dim.h}`;
+  if (cls === 'warn') return `${dim.w}×${dim.h} · soft on large prints`;
+  return `${dim.w}×${dim.h} · TOO LOW — will blur`;
+}
+
+async function readImageDimensions(file) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+    img.onerror = () => resolve(null);
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+async function pickAndUpload(role, slotEl, onDone) {
+  const inp = slotEl.querySelector('input[type=file]');
+  inp.onchange = async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const dataUrl = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(file); });
+    const dim = await readImageDimensions(file);
+    slotEl.querySelector('.hint').textContent = 'Uploading...';
+    try {
+      const r = await uploadOne(file);
+      onDone({ name: file.name.replace(/\.[^.]+$/, ''), dataUrl, dim, fileId: r.id, url: r.url });
+    } catch (err) {
+      slotEl.querySelector('.hint').textContent = 'Upload failed: ' + err.message;
+    }
+  };
+}
+
+function ensureSlots() {
+  // ensure at least one empty slot trailing
+  if (state.designs.length < 3) {
+    const last = state.designs[state.designs.length - 1];
+    if (last && (last.pattern || last.logo || last.label)) state.designs.push({ label: '', pattern: null, logo: null });
   }
-  wrap.appendChild(slot);
+}
+
+function renderUploadCell(role, design, idx) {
+  const cell = document.createElement('div');
+  const item = design[role]; // pattern or logo
+  cell.className = 'upload-cell' + (item ? ' filled' : '');
+  if (item) {
+    cell.innerHTML = `
+      <div class="label">${role}</div>
+      <img src="${item.dataUrl}">
+      <div class="dim ${dpiClass(item.dim, role)}">${dpiNote(item.dim, role)}</div>
+      <button style="margin-top:8px">Remove ${role}</button>`;
+    cell.querySelector('button').onclick = () => { state.designs[idx][role] = null; renderPatterns(); };
+  } else {
+    cell.innerHTML = `
+      <div class="label">${role}</div>
+      <div class="hint">Pick a ${role} (drop or click)</div>
+      <input type="file" accept="image/*" style="margin-top:8px">`;
+    pickAndUpload(role, cell, (data) => {
+      state.designs[idx][role] = data;
+      if (!state.designs[idx].label) state.designs[idx].label = data.name;
+      renderPatterns();
+    });
+  }
+  return cell;
 }
 
 function renderPatterns() {
-  renderLogoSlot();
-  const wrap = $('#pattern-slots');
+  ensureSlots();
+  const wrap = $('#design-slots');
   wrap.innerHTML = '';
-  for (let i = 0; i < 3; i++) {
-    const p = state.patterns[i];
+  state.designs.forEach((d, i) => {
     const slot = document.createElement('div');
-    slot.className = 'pattern-slot' + (p ? ' filled' : '');
-    if (p) {
-      slot.innerHTML = `
-        <img src="${p.dataUrl}">
-        <input type="text" value="${p.label}" placeholder="Label (e.g. Indica)">
-        <button>Remove</button>`;
-      slot.querySelector('input').oninput = e => { p.label = e.target.value; };
-      slot.querySelector('button').onclick = () => { state.patterns.splice(i, 1); renderPatterns(); };
-    } else {
-      slot.innerHTML = `<div class="hint">Slot ${i + 1}</div><input type="file" accept="image/*">`;
-      slot.querySelector('input').onchange = async e => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const dataUrl = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(file); });
-        slot.querySelector('.hint').textContent = 'Uploading...';
-        try {
-          const r = await uploadOne(file);
-          state.patterns.push({ label: file.name.replace(/\.[^.]+$/, ''), file, dataUrl, fileId: r.id, url: r.url });
-          renderPatterns();
-        } catch (err) { slot.querySelector('.hint').textContent = 'Upload failed: ' + err.message; }
-      };
+    const isFilled = d.pattern || d.logo || d.label;
+    slot.className = 'design-slot' + (isFilled ? ' filled' : '');
+
+    const labelRow = document.createElement('div');
+    labelRow.className = 'label-row';
+    labelRow.innerHTML = `<input type="text" placeholder="Design label (e.g. Indica)" value="${d.label || ''}">`;
+    labelRow.querySelector('input').oninput = e => { d.label = e.target.value; };
+    slot.appendChild(labelRow);
+
+    const uploadRow = document.createElement('div');
+    uploadRow.className = 'upload-row';
+    uploadRow.appendChild(renderUploadCell('pattern', d, i));
+    uploadRow.appendChild(renderUploadCell('logo', d, i));
+    slot.appendChild(uploadRow);
+
+    if (isFilled && state.designs.length > 1) {
+      const rm = document.createElement('button');
+      rm.className = 'remove-design';
+      rm.textContent = 'Remove this design';
+      rm.onclick = () => { state.designs.splice(i, 1); if (state.designs.length === 0) state.designs = [{ label: '', pattern: null, logo: null }]; renderPatterns(); };
+      slot.appendChild(rm);
     }
+
     wrap.appendChild(slot);
-  }
+  });
 }
 
 // ---------- REVIEW ----------
 async function renderReview() {
   const sel = Array.from(state.selected.values());
-  const pats = state.patterns.filter(p => p.fileId);
+  const pats = state.designs.filter(d => d.pattern?.fileId && d.logo?.fileId);
 
   // Pre-fetch wrap info for selected products
   $('#review-summary').innerHTML = '<div class="muted">Inspecting products for wrap-around layouts...</div>';
@@ -312,10 +362,11 @@ async function renderReview() {
 // ---------- RUN ----------
 $('#start-btn').onclick = async () => {
   const sel = Array.from(state.selected.values());
-  const pats = state.patterns.filter(p => p.fileId);
+  const designs = state.designs.filter(d => d.pattern?.fileId && d.logo?.fileId);
   if (!sel.length) return alert('Select at least one product');
-  if (!pats.length) return alert('Upload at least one pattern');
-  if (!state.logo?.fileId) return alert('Upload a logo (required)');
+  if (!designs.length) return alert('Add at least one design — both a pattern AND a logo per design');
+  const incomplete = state.designs.filter(d => (d.pattern && !d.logo) || (!d.pattern && d.logo));
+  if (incomplete.length) return alert('One or more designs has only a pattern or only a logo. Complete or remove them.');
 
   $$('.steps button').forEach(x => x.classList.remove('active'));
   $$('.step').forEach(x => x.classList.remove('active'));
@@ -329,8 +380,12 @@ $('#start-btn').onclick = async () => {
     method: 'POST',
     body: JSON.stringify({
       products: sel.map(p => ({ id: p.id, title: p.title })),
-      patterns: pats.map(p => ({ label: p.label, fileId: p.fileId, url: p.url })),
-      logo: { label: state.logo.label, fileId: state.logo.fileId, url: state.logo.url },
+      patterns: designs.map(d => ({
+        label: d.label || d.pattern.name,
+        fileId: d.pattern.fileId,
+        url: d.pattern.url,
+        logo: { fileId: d.logo.fileId, url: d.logo.url, label: d.logo.name },
+      })),
       wrapChoices: Object.fromEntries(state.wrapChoices),
     }),
   });

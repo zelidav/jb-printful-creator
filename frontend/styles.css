@@ -53,6 +53,20 @@ main { padding: 0 24px 40px; }
 .pattern-slot button { margin-top: 6px; font-size: 11px; padding: 4px 8px; }
 .pattern-slot .hint { color: var(--muted); font-size: 12px; }
 
+.design-slot { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.design-slot.filled { border-color: var(--accent); }
+.design-slot .label-row { margin-bottom: 12px; }
+.design-slot .label-row input { width: 100%; padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px; color: var(--fg); font: inherit; font-weight: 600; }
+.design-slot .upload-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.design-slot .upload-cell { background: var(--panel-2); border: 2px dashed var(--line); border-radius: 8px; padding: 12px; text-align: center; min-height: 160px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.design-slot .upload-cell.filled { border-style: solid; border-color: var(--accent); }
+.design-slot .upload-cell img { max-width: 100%; max-height: 120px; border-radius: 4px; }
+.design-slot .upload-cell .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.design-slot .upload-cell .dim { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.design-slot .upload-cell .dim.warn { color: var(--accent-2); }
+.design-slot .upload-cell .dim.bad { color: var(--danger); }
+.design-slot .remove-design { margin-top: 12px; font-size: 11px; }
+
 #review-summary table { width: 100%; border-collapse: collapse; margin: 16px 0; }
 #review-summary th, #review-summary td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 13px; }
 #review-summary th { color: var(--muted); font-weight: 500; }
