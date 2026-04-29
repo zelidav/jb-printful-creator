@@ -62,7 +62,7 @@ function renderGrid() {
       <img loading="lazy" src="${p.thumbnail || ''}" alt="">
       <div class="meta">
         <div class="name">${p.name}</div>
-        <div class="price">From $${p.min_price.toFixed(2)}</div>
+        <div class="price">${p.variant_count} variant${p.variant_count !== 1 ? 's' : ''}</div>
       </div>`;
     card.onclick = () => openOrderModal(p);
     grid.appendChild(card);
@@ -72,9 +72,20 @@ function renderGrid() {
 let searchTimer;
 $('#search').oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(renderGrid, 150); };
 
-function openOrderModal(product) {
-  const sel = product.variants[0];
+async function openOrderModal(productLite) {
   const host = $('#modal-host');
+  host.innerHTML = `<div class="modal-bg" id="mb"><div class="modal"><p>Loading variants...</p></div></div>`;
+  $('#mb').onclick = () => { host.innerHTML = ''; };
+  let product;
+  try {
+    product = await api(`/api/shop/products/${productLite.id}`);
+  } catch (e) {
+    host.innerHTML = `<div class="modal-bg" id="mb"><div class="modal"><p>Couldn't load: ${e.message}</p></div></div>`;
+    $('#mb').onclick = () => { host.innerHTML = ''; };
+    return;
+  }
+  const sel = product.variants[0];
+  if (!sel) { host.innerHTML = ''; alert('No variants available'); return; }
   host.innerHTML = `
     <div class="modal-bg" id="mb">
       <div class="modal" onclick="event.stopPropagation()">
