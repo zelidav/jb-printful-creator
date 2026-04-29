@@ -12,7 +12,10 @@
   .shop-card img { width:100%; aspect-ratio:1; object-fit:cover; background:var(--panel-2); }
   .shop-card .meta { padding:10px 12px; }
   .shop-card .name { font-size:13px; font-weight:600; line-height:1.3; }
-  .shop-card .price { color:var(--accent); font-size:13px; margin-top:4px; }
+  .shop-card .price { color:var(--muted); font-size:11px; margin-top:4px; }
+
+  .cart-btn { background:var(--panel-2); border:1px solid var(--line); color:var(--fg); border-radius:18px; padding:6px 14px; cursor:pointer; font:inherit; }
+  .cart-btn:hover { border-color:var(--accent); color:var(--accent); }
 
   .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,0.7); display:flex; align-items:flex-start; justify-content:center; padding:40px 20px; overflow-y:auto; z-index:100; }
   .modal { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:24px; max-width:640px; width:100%; }
@@ -23,12 +26,36 @@
   .modal .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   .modal .actions { display:flex; gap:10px; margin-top:20px; }
   .modal .total { font-size:16px; color:var(--accent); margin:8px 0 0; }
+
+  #cart-drawer { position:fixed; inset:0; z-index:200; }
+  #cart-drawer .cart-overlay { position:absolute; inset:0; background:rgba(0,0,0,0.6); }
+  #cart-drawer .cart-panel { position:absolute; right:0; top:0; bottom:0; width:420px; max-width:100vw; background:var(--panel); border-left:1px solid var(--line); display:flex; flex-direction:column; }
+  #cart-drawer header { display:flex; justify-content:space-between; align-items:center; padding:18px 20px; border-bottom:1px solid var(--line); }
+  #cart-drawer header h2 { margin:0; font-size:16px; }
+  #cart-close { background:none; border:none; color:var(--fg); font-size:24px; cursor:pointer; }
+  #cart-items { flex:1; overflow-y:auto; padding:12px 20px; }
+  .cart-item { display:flex; gap:10px; padding:10px 0; border-bottom:1px solid var(--line); }
+  .cart-item img { width:60px; height:60px; object-fit:cover; border-radius:4px; background:var(--panel-2); }
+  .cart-item .info { flex:1; min-width:0; font-size:12px; }
+  .cart-item .info .name { font-weight:600; line-height:1.2; }
+  .cart-item .info .variant { color:var(--muted); margin-top:2px; }
+  .cart-item .info .price { color:var(--accent); margin-top:4px; }
+  .cart-item .qty-row { display:flex; align-items:center; gap:6px; margin-top:6px; font-size:12px; }
+  .cart-item .qty-row button { background:var(--panel-2); border:1px solid var(--line); color:var(--fg); width:24px; height:24px; border-radius:4px; cursor:pointer; }
+  .cart-item .remove { background:none; border:none; color:var(--danger); cursor:pointer; padding:0; font-size:11px; margin-left:auto; }
+  .cart-footer { padding:16px 20px; border-top:1px solid var(--line); }
+  .cart-subtotal { margin-bottom:12px; font-size:14px; color:var(--muted); }
+  .cart-subtotal strong { color:var(--fg); font-size:18px; }
+  .cart-empty { color:var(--muted); padding:40px 20px; text-align:center; }
 </style>
 </head>
 <body>
 <header>
   <h1>JBD Gear — Employee Shop</h1>
-  <div id="auth-status" class="muted"></div>
+  <div style="display:flex;align-items:center;gap:16px;">
+    <span id="auth-status" class="muted"></span>
+    <button id="cart-btn" class="cart-btn">🛒 <span id="cart-count">0</span></button>
+  </div>
 </header>
 
 <section id="login" class="card">
@@ -48,6 +75,21 @@
 </main>
 
 <div id="modal-host"></div>
+
+<aside id="cart-drawer" hidden>
+  <div class="cart-overlay" id="cart-overlay"></div>
+  <div class="cart-panel">
+    <header>
+      <h2>Cart</h2>
+      <button id="cart-close">×</button>
+    </header>
+    <div id="cart-items"></div>
+    <div class="cart-footer">
+      <div class="cart-subtotal">Subtotal: <strong id="cart-subtotal">$0.00</strong></div>
+      <button id="checkout-btn" class="primary">Checkout</button>
+    </div>
+  </div>
+</aside>
 
 <script src="shop.js"></script>
 </body>
