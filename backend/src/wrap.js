@@ -49,6 +49,35 @@ export async function fitToCanvas(patternBuf, { width, height, fit = 'cover' }) 
   return sharp(patternBuf).resize(width, height, { fit }).png().toBuffer();
 }
 
+// Extract dominant color from an image (used for canvas-shoe tongue solid color)
+export async function getPrimaryColor(buf) {
+  const stats = await sharp(buf).stats();
+  const d = stats.dominant || { r: 0, g: 0, b: 0 };
+  return { r: Math.round(d.r), g: Math.round(d.g), b: Math.round(d.b) };
+}
+
+// Build a solid-color canvas with a logo centered (for canvas-shoe tongues)
+export async function solidWithLogo({ width, height, color, logoBuf, logoScale = 0.5 }) {
+  const meta = await sharp(logoBuf).metadata();
+  const targetW = Math.round(width * logoScale);
+  const targetH = Math.round((meta.height / meta.width) * targetW);
+  const resized = await sharp(logoBuf).resize(targetW, targetH, { fit: 'inside' }).png().toBuffer();
+  return sharp({
+    create: { width, height, channels: 4, background: { ...color, alpha: 1 } },
+  })
+    .composite([{ input: resized, gravity: 'center' }])
+    .png()
+    .toBuffer();
+}
+
+// Composite logo onto pattern at a given gravity + scale
+export async function compositeLogo(patternBuf, logoBuf, { gravity = 'center', scale = 0.25 } = {}) {
+  const meta = await sharp(patternBuf).metadata();
+  const targetW = Math.round(meta.width * scale);
+  const resized = await sharp(logoBuf).resize(targetW, null, { fit: 'inside' }).png().toBuffer();
+  return sharp(patternBuf).composite([{ input: resized, gravity }]).png().toBuffer();
+}
+
 // Take a Printful printfiles response and return per-placement dimensions
 export function dimsFromPrintfiles(pf) {
   const idx = {};

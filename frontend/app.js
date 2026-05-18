@@ -190,6 +190,84 @@ async function uploadOne(file) {
   return api('/api/upload', { method: 'POST', body: fd });
 }
 
+let dropPatternCache = null;
+async function fetchDropPatterns() {
+  if (!dropPatternCache) {
+    const r = await api('/api/drop-patterns');
+    dropPatternCache = r.items || [];
+  }
+  return dropPatternCache;
+}
+
+async function ingestUrlAsPattern(item) {
+  const r = await api('/api/ingest-url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: item.url, filename: item.file }),
+  });
+  const dim = await new Promise(resolve => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+    img.onerror = () => resolve(null);
+    img.src = item.url;
+  });
+  return {
+    name: item.label,
+    dataUrl: item.url,
+    dim,
+    fileId: r.id,
+    url: r.url,
+  };
+}
+
+async function openDropPicker(onPick) {
+  const items = await fetchDropPatterns();
+  const modal = document.createElement('div');
+  modal.className = 'drop-modal';
+  const groups = {};
+  for (const it of items) (groups[it.dropLabel] = groups[it.dropLabel] || []).push(it);
+  const groupHtml = Object.entries(groups).map(([drop, list]) => `
+    <div class="drop-group">
+      <h3>${drop}</h3>
+      <div class="drop-grid">
+        ${list.map((it, i) => `
+          <div class="drop-card" data-idx="${items.indexOf(it)}">
+            <img src="${it.url}" alt="${it.label}">
+            <div class="drop-label">${it.label}${it.lowRes ? ' <span class="lowres">LOW RES</span>' : ''}</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `).join('');
+  modal.innerHTML = `
+    <div class="drop-modal-inner">
+      <div class="drop-modal-head">
+        <h2>JBD Drop Patterns</h2>
+        <button class="drop-close">×</button>
+      </div>
+      <div class="drop-modal-body">${groupHtml}</div>
+    </div>`;
+  document.body.appendChild(modal);
+  const close = () => modal.remove();
+  modal.querySelector('.drop-close').onclick = close;
+  modal.onclick = e => { if (e.target === modal) close(); };
+  modal.querySelectorAll('.drop-card').forEach(card => {
+    card.onclick = async () => {
+      const it = items[parseInt(card.dataset.idx)];
+      card.classList.add('loading');
+      card.insertAdjacentHTML('beforeend', '<div class="loading-overlay">Ingesting…</div>');
+      try {
+        const data = await ingestUrlAsPattern(it);
+        close();
+        onPick(data);
+      } catch (err) {
+        card.querySelector('.loading-overlay').textContent = 'Failed: ' + err.message;
+      }
+    };
+  });
+}
+
 function dpiClass(dim, role) {
   // role: 'pattern' (needs ~2000) or 'logo' (needs ~800)
   const min = role === 'logo' ? 800 : 2000;
@@ -255,12 +333,22 @@ function renderUploadCell(role, design, idx) {
       <button style="margin-top:8px">Remove ${role}</button>`;
     cell.querySelector('button').onclick = () => { state.designs[idx][role] = null; renderPatterns(); };
   } else {
+    const browseHtml = role === 'pattern'
+      ? `<button class="browse-drops" type="button" style="margin-top:6px;font-size:11px;padding:4px 8px;">Browse JBD drops</button>`
+      : '';
     cell.innerHTML = `
       <div class="label">${role}</div>
       <div class="hint">Pick a ${role} (drop or click)</div>
-      <input type="file" accept="image/*" style="margin-top:8px">`;
+      <input type="file" accept="image/*" style="margin-top:8px">
+      ${browseHtml}`;
     pickAndUpload(role, cell, (data) => {
       state.designs[idx][role] = data;
+      if (!state.designs[idx].label) state.designs[idx].label = data.name;
+      renderPatterns();
+    });
+    const browseBtn = cell.querySelector('.browse-drops');
+    if (browseBtn) browseBtn.onclick = () => openDropPicker(data => {
+      state.designs[idx].pattern = data;
       if (!state.designs[idx].label) state.designs[idx].label = data.name;
       renderPatterns();
     });

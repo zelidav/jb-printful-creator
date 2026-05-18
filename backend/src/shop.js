@@ -16,36 +16,63 @@ function verify(orderId, action, candidate) {
 }
 
 export function attachShopRoutes(app, printful) {
-  // Public catalog of native-store sync products with retail prices
+  // Lightweight grid endpoint — basic info only, fast (<2s)
   app.get('/api/shop/products', async (req, res) => {
     try {
-      const data = await memo('shop:list', 5 * 60 * 1000, async () => {
+      const data = await memo('shop:list:lite', 30 * 60 * 1000, async () => {
         const list = await printful.get('/store/products?limit=100');
-        const items = list.body?.result || [];
-        // Fetch each product's variants for retail price + size options
-        const detailed = [];
-        for (const p of items) {
-          const d = await printful.get(`/store/products/${p.id}`);
-          const variants = (d.body?.result?.sync_variants || []).map(v => ({
-            id: v.id,
-            variant_id: v.variant_id,
-            name: v.name,
-            retail_price: v.retail_price,
-            size: v.size,
-            color: v.color,
-            availability_status: v.availability_status,
-          }));
-          detailed.push({
-            id: p.id,
-            name: p.name,
-            thumbnail: p.thumbnail_url,
-            min_price: variants.length ? Math.min(...variants.map(v => parseFloat(v.retail_price) || 0)) : 0,
-            variants,
-          });
-        }
-        return detailed;
+        const items = (list.body?.result || []).filter(p => !p.is_ignored);
+        return items.map(p => ({
+          id: p.id,
+          name: p.name,
+          thumbnail: p.thumbnail_url,
+          variant_count: p.variants,
+        }));
       });
       res.json({ count: data.length, items: data });
+    } catch (e) { res.status(500).json({ error: String(e) }); }
+  });
+
+  // Detail endpoint — fetched on-demand when user clicks a product
+  app.get('/api/shop/products/:id', async (req, res) => {
+    try {
+      const id = req.params.id;
+      const data = await memo(`shop:detail:${id}`, 30 * 60 * 1000, async () => {
+        const d = await printful.get(`/store/products/${id}`);
+        const sp = d.body?.result?.sync_product || {};
+        const sv = d.body?.result?.sync_variants || [];
+
+        // Catalog prices (cached 6h per catalog product)
+        const catIds = [...new Set(sv.map(v => v.product?.product_id).filter(Boolean))];
+        const variantCost = {};
+        for (const cid of catIds) {
+          const map = await memo(`catalog-prices:${cid}`, 6 * 60 * 60 * 1000, async () => {
+            const r = await printful.get(`/products/${cid}`);
+            const out = {};
+            for (const v of (r.body?.result?.variants || [])) out[v.id] = v.price;
+            return out;
+          });
+          Object.assign(variantCost, map);
+        }
+
+        const variants = sv.map(v => ({
+          id: v.id,
+          variant_id: v.variant_id,
+          name: v.name,
+          retail_price: variantCost[v.variant_id] || v.retail_price,
+          size: v.size,
+          color: v.color,
+          availability_status: v.availability_status,
+        }));
+        return {
+          id: sp.id,
+          name: sp.name,
+          thumbnail: sp.thumbnail_url,
+          min_price: variants.length ? Math.min(...variants.map(v => parseFloat(v.retail_price) || 0)) : 0,
+          variants,
+        };
+      });
+      res.json(data);
     } catch (e) { res.status(500).json({ error: String(e) }); }
   });
 
