@@ -39,6 +39,14 @@ app.use((req, res, next) => {
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
+// Techniques that accept a raster design (our patterns/logos). EMBROIDERY/KNITWEAR don't,
+// so products that ONLY support those can't be created from artwork — hide them from the catalog.
+const PRINTABLE_TECHNIQUES = new Set(['SUBLIMATION', 'DTFILM', 'UV', 'CUT-SEW', 'DIRECT-TO-FABRIC', 'DTG', 'DIGITAL']);
+function isEmbroideryOnlyProduct(p) {
+  const techs = (p.techniques || []).map(t => String(t.key || t.display_name || '').toUpperCase());
+  return techs.length > 0 && !techs.some(t => PRINTABLE_TECHNIQUES.has(t));
+}
+
 app.get('/api/catalog', async (req, res) => {
   try {
     const list = await memo('catalog', 24 * 60 * 60 * 1000, async () => {
@@ -52,7 +60,8 @@ app.get('/api/catalog', async (req, res) => {
     });
     const q = (req.query.q || '').toLowerCase();
     const cat = req.query.category;
-    let out = list;
+    // Drop embroidery/knitwear-only products — they can't be made from a raster design and break runs.
+    let out = list.filter(p => !isEmbroideryOnlyProduct(p));
     if (q) out = out.filter(p => (p.title || '').toLowerCase().includes(q) || (p.brand || '').toLowerCase().includes(q));
     if (cat) out = out.filter(p => String(p.main_category_id) === String(cat));
     res.json({ count: out.length, items: out });
