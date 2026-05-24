@@ -64,17 +64,31 @@ function goToStep(name) {
   $('#step-' + name).classList.add('active');
   if (name === 'patterns') renderPatterns();
   if (name === 'review') renderReview();
+  updateSelTray();
 }
 $$('.steps button').forEach(b => { b.onclick = () => goToStep(b.dataset.step); });
-document.addEventListener('click', e => { if (e.target?.id === 'next-fab') goToStep('patterns'); });
 const toReviewBtn = document.getElementById('to-review');
 if (toReviewBtn) toReviewBtn.onclick = () => goToStep('review');
 
+// Sticky selected-products tray (only on the Products step)
+function updateSelTray() {
+  const tray = $('#sel-tray');
+  if (!tray) return;
+  const n = state.selected.size;
+  const onProducts = $('#step-products')?.classList.contains('active');
+  tray.hidden = n === 0 || !onProducts;
+  $('#sel-tray-text').textContent = `${n} product${n !== 1 ? 's' : ''} selected`;
+}
+$('#sel-next')?.addEventListener('click', () => goToStep('patterns'));
+$('#sel-clear')?.addEventListener('click', () => { state.selected.clear(); renderCatalog(); });
+
 // ---------- CATALOG ----------
 function makeProductCard(p) {
+  const isSel = state.selected.has(p.id);
   const card = document.createElement('div');
-  card.className = 'product-card' + (state.selected.has(p.id) ? ' selected' : '');
+  card.className = 'product-card' + (isSel ? ' selected' : '');
   card.innerHTML = `
+    <div class="sel-check" aria-hidden="true">✓</div>
     <img loading="lazy" src="${p.image || ''}" alt="">
     <div class="meta">
       <div class="title">${p.title || 'Untitled'}</div>
@@ -143,9 +157,7 @@ function renderCatalog() {
   const grid = $('#catalog-grid');
   grid.innerHTML = '';
 
-  // Floating Next button (only show if selected > 0)
-  $('#next-fab').hidden = state.selected.size === 0;
-  $('#next-fab').textContent = `Next: Patterns & Logo (${state.selected.size}) →`;
+  updateSelTray();
 
   if (q) {
     filtered.forEach(p => grid.appendChild(makeProductCard(p)));

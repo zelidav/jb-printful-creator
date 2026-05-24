@@ -59,7 +59,7 @@ function render() {
   const grid = $('#grid');
   grid.innerHTML = '';
   if (!state.templates.length) {
-    grid.innerHTML = '<p class="muted">No templates yet. Create some in the <a href="index.html" style="color:var(--accent);">creator</a>.</p>';
+    grid.innerHTML = '<p class="muted">No templates yet. Create some in the <a href="create.html" style="color:var(--accent);">creator</a>.</p>';
     return;
   }
   for (const t of state.templates) {

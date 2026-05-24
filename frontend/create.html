@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Create — JB Printful</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<nav class="topnav">
+  <a href="index.html" class="brand">JB&nbsp;Printful</a>
+  <div class="topnav-links">
+    <a href="create.html" class="active">Create</a>
+    <a href="templates.html">Templates</a>
+    <a href="drops.html">Drops</a>
+    <a href="shop.html">Shop</a>
+  </div>
+  <span id="auth-status" class="muted"></span>
+</nav>
+
+<section id="login" class="card">
+  <h2>Sign in</h2>
+  <label>Password <input id="password" type="password" autofocus></label>
+  <button id="login-btn">Connect</button>
+  <div id="login-msg" class="msg"></div>
+</section>
+
+<main id="app" hidden>
+  <nav class="steps">
+    <button data-step="products" class="active">1. Products</button>
+    <button data-step="patterns">2. Patterns</button>
+    <button data-step="review">3. Review</button>
+    <button data-step="run">4. Run</button>
+  </nav>
+
+  <section id="step-products" class="step active">
+    <h2 class="step-title">Step 1 — Pick blank products</h2>
+    <p class="step-help">Click products to select them. Each one becomes a template for every design you add next.</p>
+    <div class="bar">
+      <input id="catalog-search" placeholder="Search catalog (e.g. tee, hoodie, mug)" />
+      <span class="muted"><span id="catalog-count">0</span> products · <span id="selected-count">0</span> selected</span>
+    </div>
+    <div id="catalog-grid" class="grid"></div>
+  </section>
+
+  <section id="step-patterns" class="step">
+    <h2 class="step-title">Step 2 — Add designs</h2>
+    <p class="step-help">Each design = one pattern + one matching logo + a label. Add 1–3. Tip: <strong>Browse JBD drops</strong> fills the pattern and its strain logo in one click.</p>
+    <div id="design-slots"></div>
+    <div class="step-actions">
+      <button id="to-review" class="primary">Next: Review →</button>
+    </div>
+  </section>
+
+  <section id="step-review" class="step">
+    <h2 class="step-title">Step 3 — Review</h2>
+    <p class="step-help">Confirm the blanks and designs below. Nothing is created until you click the button at the bottom.</p>
+    <div id="review-summary"></div>
+    <div id="wrap-prompts"></div>
+    <div class="step-actions">
+      <button id="start-btn" class="primary">Create &amp; save templates →</button>
+    </div>
+  </section>
+
+  <section id="step-run" class="step">
+    <h2 class="step-title">Step 4 — Creating templates</h2>
+    <div id="progress"></div>
+    <div id="results"></div>
+  </section>
+</main>
+
+<!-- Selected-products tray (sticky) -->
+<div id="sel-tray" hidden>
+  <span id="sel-tray-text">0 selected</span>
+  <button id="sel-clear" type="button">Clear</button>
+  <button id="sel-next" class="primary" type="button">Next: Patterns &amp; Logo →</button>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Drops — JB Printful</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<nav class="topnav">
+  <a href="index.html" class="brand">JB&nbsp;Printful</a>
+  <div class="topnav-links">
+    <a href="create.html">Create</a>
+    <a href="templates.html">Templates</a>
+    <a href="drops.html" class="active">Drops</a>
+    <a href="shop.html">Shop</a>
+  </div>
+  <span id="auth-status" class="muted"></span>
+</nav>
+
+<section id="login" class="card">
+  <h2>Sign in</h2>
+  <label>Password <input id="password" type="password" autofocus></label>
+  <button id="login-btn">Connect</button>
+  <div id="login-msg" class="msg"></div>
+</section>
+
+<main id="app" hidden>
+  <h2 class="step-title">JBD Drop Library</h2>
+  <p class="step-help">The artwork available in <strong>Create → Browse JBD drops</strong>. Each strain has a pattern, a solid, and a paired logo. <a href="create.html" style="color:var(--accent);">Use these in the creator →</a></p>
+  <div id="drops-wrap"></div>
+</main>
+
+<script src="drops.js"></script>
+</body>
+</html>
