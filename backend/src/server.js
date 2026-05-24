@@ -4,7 +4,7 @@ import multer from 'multer';
 import { Storage } from '@google-cloud/storage';
 import { pf } from './printful.js';
 import { memo } from './cache.js';
-import { classifyPlacements, buildShoeFiles, fitToCanvas, dimsFromPrintfiles, getPrimaryColor, solidWithLogo, compositeLogo, imageDims, tileToCanvas } from './wrap.js';
+import { classifyPlacements, buildShoeFiles, fitToCanvas, dimsFromPrintfiles, getPrimaryColor, solidWithLogo, compositeLogo, imageDims, tileToCanvas, dominantColors } from './wrap.js';
 import { createJob, getJob, emit, subscribe } from './jobs.js';
 import { attachShopRoutes } from './shop.js';
 import { attachTemplateRoutes } from './templates.js';
@@ -320,6 +320,14 @@ async function imgDimsCached(url, key) {
 // A position that maps an already-panel-sized image 1:1 onto the print area (no scaling).
 function exactBox(w, h) { return { area_width: w, area_height: h, width: w, height: h, top: 0, left: 0 }; }
 
+// Snap an {r,g,b} to the nearest hex in an embroidery thread palette (squared RGB distance).
+function hexToRgb(h) { return { r: parseInt(h.slice(1, 3), 16), g: parseInt(h.slice(3, 5), 16), b: parseInt(h.slice(5, 7), 16) }; }
+function snapToPalette(c, hexes) {
+  let best = hexes[0], bd = Infinity;
+  for (const h of hexes) { const p = hexToRgb(h); const d = (p.r - c.r) ** 2 + (p.g - c.g) ** 2 + (p.b - c.b) ** 2; if (d < bd) { bd = d; best = h; } }
+  return best;
+}
+
 // Build a big all-over panel by TILING the pattern at the panel's exact size (full motifs,
 // repeated — no zoom/crop), optionally compositing the logo at a fractional anchor. Returns {id,url}.
 async function tiledPanelFile(pat, w, h, { logo, logoOpts } = {}) {
@@ -380,14 +388,30 @@ async function buildFilesForVariant(prod, pat, detail, logo) {
   if (isEmbroideryOnly(detail.placementNames)) {
     if (!logo) throw new Error(`Catalog #${prod.id} is embroidery-only — please upload a logo.`);
     const placements = detail.placementNames.filter(p => !SKIP_PLACEMENT.test(p));
-    return placements.map(p => ({
-      type: p,
-      id: logo.fileId,
-      options: [
-        { id: 'thread_colors', value: ['#000000'] },
-        { id: 'embroidery_type', value: 'flat' },
-      ],
-    }));
+    // full_color = unlimited-color embroidery → an exact match of the logo's colors. We also pass
+    // the logo's dominant colors snapped to this product's thread palette (the option is required;
+    // its id is placement-suffixed, e.g. thread_colors_front_large).
+    const palette = Object.keys((detail.info?.product?.options?.find(o => o.id === 'thread_colors') || {}).values || {});
+    let threads = ['#000000'];
+    if (palette.length) {
+      try {
+        const cols = await dominantColors(await fetchPatternBuf(logo.url), 4);
+        const snapped = [...new Set(cols.map(c => snapToPalette(c, palette)))];
+        if (snapped.length) threads = snapped.slice(0, 6);
+      } catch { /* fall back to black */ }
+    }
+    return placements.map(p => {
+      const base = p.replace(/^embroidery_/, '');
+      return {
+        type: p,
+        id: logo.fileId,
+        srcUrl: logo.url, fit: 'contain', fraction: 0.8, // hero mockup: logo embroidered on the blank
+        options: [
+          { id: 'full_color', value: true },
+          { id: `thread_colors_${base}`, value: threads },
+        ],
+      };
+    });
   }
 
   // ---------- CANVAS HIGH-TOP (shoe_quarters_* — heel mirror + tongue solid+logo) ----------
@@ -562,9 +586,9 @@ async function generateAndSetThumbnail(catalogId, variantId, files, patUrl, deta
     format: 'jpg',
     files: filesPayload,
   });
-  if (task.status !== 200 || !task.body?.result?.task_key) return null;
+  if (task.status !== 200 || !task.body?.result?.task_key) throw new Error(`mockup create-task ${task.status}: ${JSON.stringify(task.body?.result || task.body).slice(0, 200)}`);
   const result = await pollMockupTask(task.body.result.task_key);
-  if (result.status !== 'completed' || !result.mockups?.length) return null;
+  if (result.status !== 'completed' || !result.mockups?.length) throw new Error(`mockup task ${result.status}: ${JSON.stringify(result).slice(0, 200)}`);
 
   // Pick lifestyle if available, else first
   const flat = result.mockups.flatMap(m => [{ url: m.mockup_url }, ...(m.extra || []).map(e => ({ url: e.url, title: e.title }))]);
@@ -572,10 +596,10 @@ async function generateAndSetThumbnail(catalogId, variantId, files, patUrl, deta
 
   // Permanentize on Printful CDN
   const ingest = await printful.post('/files', { type: 'default', url: chosen.url, filename: `mockup_${syncId}.jpg`, visible: false });
-  if (ingest.status !== 200) return null;
+  if (ingest.status !== 200) throw new Error(`mockup ingest ${ingest.status}: ${JSON.stringify(ingest.body).slice(0, 200)}`);
   const ready = await pollPrintfulFile(ingest.body.result.id);
   const permUrl = ready?.preview_url;
-  if (!permUrl) return null;
+  if (!permUrl) throw new Error('mockup permanentize: no preview_url');
 
   // Update the sync_product thumbnail
   await printful.put(`/store/products/${syncId}`, { sync_product: { thumbnail: permUrl } });

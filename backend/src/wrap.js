@@ -49,6 +49,22 @@ export async function fitToCanvas(patternBuf, { width, height, fit = 'cover' }) 
   return sharp(patternBuf).resize(width, height, { fit }).png().toBuffer();
 }
 
+// Top N dominant colors of an image (ignoring transparent/near-empty pixels), for matching
+// a logo to an embroidery thread palette. Returns [{r,g,b}] most-frequent first.
+export async function dominantColors(buf, n = 4) {
+  const { data } = await sharp(buf).resize(64, 64, { fit: 'inside' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const buckets = new Map();
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 128) continue; // skip transparent
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    const key = `${r >> 4},${g >> 4},${b >> 4}`; // coarse bucket
+    const e = buckets.get(key) || { r: 0, g: 0, b: 0, c: 0 };
+    e.r += r; e.g += g; e.b += b; e.c++; buckets.set(key, e);
+  }
+  return [...buckets.values()].sort((a, b) => b.c - a.c).slice(0, n)
+    .map(e => ({ r: Math.round(e.r / e.c), g: Math.round(e.g / e.c), b: Math.round(e.b / e.c) }));
+}
+
 // Extract dominant color from an image (used for canvas-shoe tongue solid color)
 export async function getPrimaryColor(buf) {
   const stats = await sharp(buf).stats();
