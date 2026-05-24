@@ -67,6 +67,8 @@ function goToStep(name) {
 }
 $$('.steps button').forEach(b => { b.onclick = () => goToStep(b.dataset.step); });
 document.addEventListener('click', e => { if (e.target?.id === 'next-fab') goToStep('patterns'); });
+const toReviewBtn = document.getElementById('to-review');
+if (toReviewBtn) toReviewBtn.onclick = () => goToStep('review');
 
 // ---------- CATALOG ----------
 function makeProductCard(p) {
@@ -415,18 +417,58 @@ async function renderReview() {
     }
   }
 
-  let html = `<table><thead><tr><th>Product</th><th>Placements</th><th>Wrap</th></tr></thead><tbody>`;
-  for (const prod of sel) {
-    const info = state.wrapInfo.get(prod.id);
-    const wrapKind = info?.wrap?.kind || 'single';
-    const badge = wrapKind === 'single' ? '' : `<span class="badge wrap">${wrapKind}</span>`;
-    html += `<tr><td>${prod.title} <span class="muted">#${prod.id}</span></td>
-      <td class="muted">${(info?.placements || []).map(p => p.placement).join(', ') || '—'}</td>
-      <td>${badge}</td></tr>`;
-  }
-  html += `</tbody></table>
-    <p>Will create <strong>${sel.length * pats.length}</strong> products: ${sel.length} blanks × ${pats.length} patterns.</p>`;
-  $('#review-summary').innerHTML = html;
+  const total = sel.length * pats.length;
+
+  // Designs strip — show each design's pattern + paired logo
+  const designsHtml = pats.length ? `
+    <div class="review-block">
+      <h3>${pats.length} design${pats.length > 1 ? 's' : ''}</h3>
+      <div class="design-strip">
+        ${pats.map(d => `
+          <div class="design-chip">
+            <div class="design-chip-imgs">
+              <img src="${d.pattern.dataUrl}" alt="" title="pattern">
+              <img src="${d.logo.dataUrl}" class="logo" alt="" title="logo">
+            </div>
+            <div class="design-chip-label">${d.label || d.pattern.name}</div>
+          </div>`).join('')}
+      </div>
+    </div>` : `<div class="review-block"><p class="msg error">No complete designs yet — go back to Step 2 and add a pattern + logo.</p></div>`;
+
+  // Products grid — WITH images
+  const productsHtml = `
+    <div class="review-block">
+      <h3>${sel.length} blank${sel.length > 1 ? 's' : ''}</h3>
+      <div class="grid">
+        ${sel.map(prod => {
+          const info = state.wrapInfo.get(prod.id);
+          const wrapKind = info?.wrap?.kind || 'single';
+          const wrapBadge = wrapKind === 'single' ? '' : `<span class="badge wrap">${wrapKind}</span>`;
+          return `<div class="product-card">
+            <img loading="lazy" src="${prod.image || ''}" alt="">
+            <div class="meta">
+              <div class="title">${prod.title || 'Untitled'}</div>
+              <div class="brand">#${prod.id}</div>
+              ${wrapBadge}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+
+  $('#review-summary').innerHTML = `
+    ${designsHtml}
+    ${productsHtml}
+    <div class="review-total">
+      <strong>${total}</strong> template${total !== 1 ? 's' : ''} will be created
+      <span class="muted">— ${sel.length} blank${sel.length > 1 ? 's' : ''} × ${pats.length} design${pats.length > 1 ? 's' : ''}</span>
+      <div class="muted" style="margin-top:6px;">Saved to your Printful <strong>library</strong> (not published to any storefront). Publish later from the Templates page.</div>
+    </div>`;
+
+  // Reflect the count on the action button so it's obvious what the click does
+  const startBtn = $('#start-btn');
+  startBtn.textContent = total ? `Create & save ${total} template${total !== 1 ? 's' : ''} →` : 'Add a design first';
+  startBtn.disabled = !total;
 
   // Wrap prompts for unknown wraps
   const prompts = $('#wrap-prompts');
@@ -469,8 +511,9 @@ $('#start-btn').onclick = async () => {
   $$('.steps button')[3].classList.add('active');
   $('#step-run').classList.add('active');
 
-  $('#progress').innerHTML = `<div>Starting job...</div><div class="progress-bar"><div style="width:0%"></div></div>`;
+  const total = sel.length * designs.length;
   $('#results').innerHTML = '';
+  $('#progress').innerHTML = `<div class="run-head"><span class="spinner"></span> Creating ${total} template${total !== 1 ? 's' : ''}…</div><div class="progress-bar"><div style="width:0%"></div></div>`;
 
   const job = await api('/api/jobs', {
     method: 'POST',
@@ -486,49 +529,85 @@ $('#start-btn').onclick = async () => {
     }),
   });
 
-  const total = sel.length * pats.length;
-  let done = 0;
-  const es = new EventSource(state.backend + `/api/jobs/${job.id}/stream?_pass=${encodeURIComponent(state.pass)}`);
-  // EventSource cannot send custom headers in browser; fallback to polling
-  es.close();
-  pollJob(job.id, total);
+  pollJob(job.id, total, Date.now());
 };
 
-async function pollJob(id, total) {
-  const log = [];
-  while (true) {
-    const j = await api(`/api/jobs/${id}`);
-    const newLog = j.log.slice(log.length);
-    log.push(...newLog);
-    let done = 0; let fail = 0;
-    for (const ev of log) { if (ev.type === 'item-ok') done++; if (ev.type === 'item-fail') fail++; }
-    const pct = Math.round(((done + fail) / total) * 100);
-    $('#progress').innerHTML = `
-      <div>${done} ok · ${fail} fail · ${total - done - fail} pending</div>
-      <div class="progress-bar"><div style="width:${pct}%"></div></div>
-      <div>${log.slice(-10).map(ev => {
-        const cls = ev.type === 'item-ok' ? 'ok' : ev.type === 'item-fail' ? 'fail' : '';
-        return `<div class="log-line ${cls}">${ev.type}${ev.label ? ' · ' + ev.label : ''}${ev.sync_id ? ' → #' + ev.sync_id : ''}</div>`;
-      }).join('')}</div>`;
-    if (j.status === 'done' || j.status === 'error') {
-      const okItems = j.items.filter(i => i.ok);
-      $('#results').innerHTML = `<h3>Done — ${okItems.length}/${j.items.length} templates saved</h3>
-        <p class="muted">Saved to your Printful library, not on any storefront. <a href="templates.html" style="color:var(--accent);">→ Go to Templates</a> to review, edit, and publish to a store when ready.</p>
-        <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(220px, 1fr))">
-          ${okItems.map(i => `
-            <div class="product-card">
-              <img loading="lazy" src="${i.thumbnail || ''}" alt="">
-              <div class="meta">
-                <div class="title">${i.product_title || 'Product'}</div>
-                <div class="brand">${i.label}</div>
-                <a target="_blank" href="https://www.printful.com/dashboard/products/${i.sync_id}" class="badge">#${i.sync_id} →</a>
-                ${i.placements ? `<span class="badge" title="${i.placements.join(', ')}">${i.placements.length} panel${i.placements.length>1?'s':''}</span>` : ''}
-                ${i.wrap && i.wrap !== 'single' ? ` <span class="badge wrap">${i.wrap}</span>` : ''}
-              </div>
-            </div>`).join('')}
-        </div>`;
-      break;
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+async function pollJob(id, total, startedAt) {
+  let running = true;
+  // Live clock — ticks every second so the user always sees time moving,
+  // independent of the 2.5s status poll.
+  const tick = setInterval(() => {
+    if (!running) return;
+    const el = $('#run-elapsed');
+    if (el) el.textContent = fmtElapsed(Date.now() - startedAt);
+  }, 1000);
+
+  try {
+    while (true) {
+      const j = await api(`/api/jobs/${id}`);
+      const log = j.log || [];
+      let done = 0, fail = 0, current = '';
+      for (const ev of log) {
+        if (ev.type === 'item-ok') done++;
+        else if (ev.type === 'item-fail') fail++;
+        else if (ev.type === 'item-start') current = ev.label;
+      }
+      const finished = done + fail;
+      const pct = total ? Math.round((finished / total) * 100) : 0;
+      const elapsed = Date.now() - startedAt;
+      const eta = finished ? (elapsed / finished) * (total - finished) : 0;
+
+      $('#progress').innerHTML = `
+        <div class="run-head">
+          <span class="spinner"></span>
+          <strong>${finished} / ${total}</strong> done
+          <span class="muted">· ${done} ok · ${fail} fail</span>
+          <span class="run-timer">⏱ <span id="run-elapsed">${fmtElapsed(elapsed)}</span>${eta ? ` · ~${fmtElapsed(eta)} left` : ''}</span>
+        </div>
+        <div class="progress-bar"><div style="width:${pct}%"></div></div>
+        <div class="run-current muted">${current ? 'Working on: ' + current : 'Starting…'}</div>
+        <div class="run-log">${log.slice(-8).map(ev => {
+          const cls = ev.type === 'item-ok' ? 'ok' : ev.type === 'item-fail' ? 'fail' : '';
+          return `<div class="log-line ${cls}">${ev.type}${ev.label ? ' · ' + ev.label : ''}${ev.sync_id ? ' → #' + ev.sync_id : ''}</div>`;
+        }).join('')}</div>`;
+
+      if (j.status === 'done' || j.status === 'error') {
+        running = false;
+        clearInterval(tick);
+        const okItems = j.items.filter(i => i.ok);
+        const failItems = j.items.filter(i => !i.ok);
+        $('#progress').innerHTML = `
+          <div class="run-head ${failItems.length ? '' : 'done'}">
+            ✓ Finished in ${fmtElapsed(Date.now() - startedAt)} — <strong>${okItems.length}/${j.items.length}</strong> saved${failItems.length ? ` · <span class="fail">${failItems.length} failed</span>` : ''}
+          </div>
+          <div class="progress-bar"><div style="width:100%"></div></div>`;
+        $('#results').innerHTML = `
+          <p class="muted" style="margin:4px 0 16px;">Saved to your Printful <strong>library</strong>, not on any storefront. <a href="templates.html" style="color:var(--accent);">→ Go to Templates</a> to review, edit, and publish when ready.</p>
+          ${failItems.length ? `<div class="review-block"><h3 class="fail">${failItems.length} failed</h3>${failItems.map(i => `<div class="log-line fail">${i.label} — ${typeof i.error === 'string' ? i.error : JSON.stringify(i.error).slice(0, 160)}</div>`).join('')}</div>` : ''}
+          <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(220px, 1fr))">
+            ${okItems.map(i => `
+              <div class="product-card">
+                <img loading="lazy" src="${i.thumbnail || ''}" alt="">
+                <div class="meta">
+                  <div class="title">${i.product_title || 'Product'}</div>
+                  <div class="brand">${i.label}</div>
+                  <a target="_blank" href="https://www.printful.com/dashboard/products/${i.sync_id}" class="badge">#${i.sync_id} →</a>
+                  ${i.placements ? `<span class="badge" title="${i.placements.join(', ')}">${i.placements.length} panel${i.placements.length > 1 ? 's' : ''}</span>` : ''}
+                  ${i.wrap && i.wrap !== 'single' ? ` <span class="badge wrap">${i.wrap}</span>` : ''}
+                </div>
+              </div>`).join('')}
+          </div>`;
+        break;
+      }
+      await new Promise(r => setTimeout(r, 2500));
     }
-    await new Promise(r => setTimeout(r, 2500));
+  } finally {
+    running = false;
+    clearInterval(tick);
   }
 }

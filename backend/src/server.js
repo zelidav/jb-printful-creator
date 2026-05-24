@@ -4,7 +4,7 @@ import multer from 'multer';
 import { Storage } from '@google-cloud/storage';
 import { pf } from './printful.js';
 import { memo } from './cache.js';
-import { classifyPlacements, buildShoeFiles, fitToCanvas, dimsFromPrintfiles, getPrimaryColor, solidWithLogo, compositeLogo } from './wrap.js';
+import { classifyPlacements, buildShoeFiles, fitToCanvas, dimsFromPrintfiles, getPrimaryColor, solidWithLogo, compositeLogo, imageDims } from './wrap.js';
 import { createJob, getJob, emit, subscribe } from './jobs.js';
 import { attachShopRoutes } from './shop.js';
 import { attachTemplateRoutes } from './templates.js';
@@ -399,13 +399,29 @@ async function pollPrintfulFile(fileId, maxSec = 60) {
 }
 
 async function generateAndSetThumbnail(catalogId, variantId, files, patUrl, detail, syncId) {
+  // Fit the design into each print area WITHOUT distorting it. We never stretch the
+  // image to the area's aspect (that warps any baked-in logo, e.g. on beach towels);
+  // instead we scale by the smaller ratio (contain) and center it.
+  let design = null;
+  try { design = await imageDims(await fetchPatternBuf(patUrl)); } catch { /* fall back to area fill */ }
+
+  const fitPosition = (aw, ah) => {
+    if (!design?.width || !design?.height) {
+      return { area_width: aw, area_height: ah, width: aw, height: ah, top: 0, left: 0 };
+    }
+    const scale = Math.min(aw / design.width, ah / design.height);
+    const w = Math.round(design.width * scale);
+    const h = Math.round(design.height * scale);
+    return { area_width: aw, area_height: ah, width: w, height: h, top: Math.round((ah - h) / 2), left: Math.round((aw - w) / 2) };
+  };
+
   // Build mockup payload — apply the user's pattern URL to every placement we attached
   const filesPayload = files.map(f => {
     const dim = detail.dims[f.type] || { width: 1800, height: 1800 };
     return {
       placement: f.type,
       image_url: patUrl,
-      position: { area_width: dim.width, area_height: dim.height, width: dim.width, height: dim.height, top: 0, left: 0 },
+      position: fitPosition(dim.width, dim.height),
     };
   });
   const task = await printful.post(`/mockup-generator/create-task/${catalogId}`, {

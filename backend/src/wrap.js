@@ -70,12 +70,20 @@ export async function solidWithLogo({ width, height, color, logoBuf, logoScale =
     .toBuffer();
 }
 
-// Composite logo onto pattern at a given gravity + scale
+// Composite logo onto pattern at a given gravity + scale.
+// ASPECT RULE: the logo is only ever scaled by width (height auto) with fit:'inside',
+// so its aspect ratio is never altered. Do not pass an explicit height here.
 export async function compositeLogo(patternBuf, logoBuf, { gravity = 'center', scale = 0.25 } = {}) {
   const meta = await sharp(patternBuf).metadata();
   const targetW = Math.round(meta.width * scale);
-  const resized = await sharp(logoBuf).resize(targetW, null, { fit: 'inside' }).png().toBuffer();
+  const resized = await sharp(logoBuf).resize({ width: targetW, fit: 'inside' }).png().toBuffer();
   return sharp(patternBuf).composite([{ input: resized, gravity }]).png().toBuffer();
+}
+
+// Pixel dimensions of an image buffer (used to fit designs into print areas without distortion).
+export async function imageDims(buf) {
+  const m = await sharp(buf).metadata();
+  return { width: m.width || 0, height: m.height || 0 };
 }
 
 // Take a Printful printfiles response and return per-placement dimensions

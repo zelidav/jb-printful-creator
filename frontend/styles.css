@@ -67,9 +67,31 @@ main { padding: 0 24px 40px; }
 .design-slot .upload-cell .dim.bad { color: var(--danger); }
 .design-slot .remove-design { margin-top: 12px; font-size: 11px; }
 
-#review-summary table { width: 100%; border-collapse: collapse; margin: 16px 0; }
-#review-summary th, #review-summary td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 13px; }
-#review-summary th { color: var(--muted); font-weight: 500; }
+.step-title { margin: 0 0 4px; font-size: 16px; }
+.step-help { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+.step-actions { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.step-actions .primary { font-size: 15px; padding: 12px 22px; }
+
+.review-block { margin-bottom: 22px; }
+.review-block h3 { margin: 0 0 10px; font-size: 13px; color: var(--accent-2); text-transform: uppercase; letter-spacing: 0.5px; }
+.review-block h3.fail { color: var(--danger); }
+.design-strip { display: flex; flex-wrap: wrap; gap: 12px; }
+.design-chip { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; width: 150px; }
+.design-chip-imgs { position: relative; }
+.design-chip-imgs img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 5px; background: var(--panel-2); display: block; }
+/* logo overlays the pattern, object-fit:contain so it is NEVER distorted */
+.design-chip-imgs img.logo { position: absolute; right: 6px; bottom: 6px; width: 46px; height: 46px; aspect-ratio: auto; object-fit: contain; background: rgba(0,0,0,0.35); border: 1px solid var(--line); border-radius: 5px; padding: 2px; }
+.design-chip-label { margin-top: 8px; font-size: 12px; font-weight: 600; text-align: center; }
+.review-total { background: var(--panel); border: 1px solid var(--accent); border-radius: 8px; padding: 14px 16px; font-size: 15px; }
+
+.run-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 4px; }
+.run-head.done { color: var(--ok); }
+.run-head .fail { color: var(--danger); }
+.run-timer { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--muted); }
+.run-current { font-size: 12px; margin: 6px 0; }
+.run-log { margin-top: 8px; }
+.spinner { width: 13px; height: 13px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; display: inline-block; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 #wrap-prompts .wrap-prompt { background: var(--panel); border: 1px solid var(--accent-2); border-radius: 8px; padding: 12px 16px; margin: 8px 0; }
 #wrap-prompts h4 { margin: 0 0 6px; font-size: 13px; color: var(--accent-2); }
