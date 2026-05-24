@@ -276,6 +276,17 @@ async function getCatalogDetail(catalogId) {
 
 const SKIP_PLACEMENT = /^(label_|inside_label|branding)/i;
 
+// "Fashion-designer" placement routing — decide where the PATTERN goes vs a clean LOGO.
+//   logo    → small branding spots (sleeve, chest, pocket): drop the clean logo here
+//   skip    → labels / inside / embroidery: we don't fill these from raster artwork
+//   pattern → main body & canvas panels (front, back, default, all-over): the pattern is the statement
+const LOGO_SPOT = /(sleeve|chest|breast|pocket|cuff|nape|collar|hip)/i;
+function placementRole(p) {
+  if (SKIP_PLACEMENT.test(p) || /^(embroidery_|inside|neck)/i.test(p)) return 'skip';
+  if (LOGO_SPOT.test(p)) return 'logo';
+  return 'pattern';
+}
+
 // Per-catalog logo placement recipe (where + how to apply user's logo)
 const LOGO_RECIPES = {
   // canvas high-top: tongue = solid color of pattern + logo centered
@@ -352,13 +363,31 @@ async function buildFilesForVariant(prod, pat, detail, logo) {
     });
   }
 
-  // ---------- GENERAL MULTI-PLACEMENT (with optional logo composite) ----------
-  const placements = detail.placementNames.filter(p => !SKIP_PLACEMENT.test(p));
-  if (placements.length === 0) {
+  // ---------- GENERAL MULTI-PLACEMENT ----------
+  const usable = detail.placementNames.filter(p => placementRole(p) !== 'skip');
+  if (usable.length === 0) {
     return [{ type: detail.placementNames[0] || 'default', id: pat.fileId }];
   }
 
-  // If logo provided + composite recipe, generate ONE merged file and apply per recipe
+  const logoSpots = usable.filter(p => placementRole(p) === 'logo');
+  let mainSpots = usable.filter(p => placementRole(p) === 'pattern');
+  // front and front_large are the same area at two sizes — never fill both
+  if (mainSpots.includes('front') && mainSpots.includes('front_large')) {
+    mainSpots = mainSpots.filter(p => p !== 'front_large');
+  }
+
+  // Fashion-designer routing: when the garment has a dedicated branding spot
+  // (sleeve, chest…), make the PATTERN the statement on the body and drop a CLEAN,
+  // undistorted logo on the branding spot — not a merged pattern+logo stamped everywhere.
+  if (logo && logoSpots.length && mainSpots.length) {
+    return [
+      ...mainSpots.map(p => ({ type: p, id: pat.fileId })),
+      ...logoSpots.map(p => ({ type: p, id: logo.fileId })),
+    ];
+  }
+
+  // Single-surface items (totes, towels, cases…) have no separate logo spot —
+  // place the logo tastefully onto the pattern via the per-product recipe.
   if (logo && recipe?.kind === 'composite') {
     const cacheKey = `composite:${pat.fileId}:${logo.fileId}:${prod.id}`;
     const mergedFileId = await memo(cacheKey, 60 * 60 * 1000, async () => {
@@ -369,20 +398,14 @@ async function buildFilesForVariant(prod, pat, detail, logo) {
       const up = await uploadBufferToPrintful(buf, `${safeName}_logo.png`);
       return up.id;
     });
-
-    // If recipe restricts to specific placements, use logo on those; pattern on rest
     if (recipe.onlyPlacements?.length) {
-      return placements.map(p => ({
-        type: p,
-        id: recipe.onlyPlacements.includes(p) ? mergedFileId : pat.fileId,
-      }));
+      return usable.map(p => ({ type: p, id: recipe.onlyPlacements.includes(p) ? mergedFileId : pat.fileId }));
     }
-    // Otherwise apply merged file to all placements
-    return placements.map(p => ({ type: p, id: mergedFileId }));
+    return usable.map(p => ({ type: p, id: mergedFileId }));
   }
 
-  // No logo / no recipe: pattern only on every placement
-  return placements.map(p => ({ type: p, id: pat.fileId }));
+  // No logo / no recipe: pattern on every usable placement
+  return usable.map(p => ({ type: p, id: pat.fileId }));
 }
 
 async function pollMockupTask(taskKey, maxSec = 180) {
@@ -407,30 +430,32 @@ async function pollPrintfulFile(fileId, maxSec = 60) {
   return null;
 }
 
-async function generateAndSetThumbnail(catalogId, variantId, files, patUrl, detail, syncId) {
-  // Fit the design into each print area WITHOUT distorting it. We never stretch the
-  // image to the area's aspect (that warps any baked-in logo, e.g. on beach towels);
-  // instead we scale by the smaller ratio (contain) and center it.
-  let design = null;
+async function generateAndSetThumbnail(catalogId, variantId, files, patUrl, detail, syncId, logoUrl) {
+  // Fit each image into its print area WITHOUT distorting it. We never stretch to the
+  // area's aspect (that warps logos); we scale by the smaller ratio (contain) and center.
+  let design = null, logoSize = null;
   try { design = await imageDims(await fetchPatternBuf(patUrl)); } catch { /* fall back to area fill */ }
+  if (logoUrl) { try { logoSize = await imageDims(await fetchPatternBuf(logoUrl)); } catch { /* ignore */ } }
 
-  const fitPosition = (aw, ah) => {
-    if (!design?.width || !design?.height) {
+  // fraction < 1 leaves breathing room (logos sit as a clean accent, not edge-to-edge)
+  const fitPosition = (aw, ah, dims, fraction = 1) => {
+    if (!dims?.width || !dims?.height) {
       return { area_width: aw, area_height: ah, width: aw, height: ah, top: 0, left: 0 };
     }
-    const scale = Math.min(aw / design.width, ah / design.height);
-    const w = Math.round(design.width * scale);
-    const h = Math.round(design.height * scale);
+    const scale = Math.min(aw / dims.width, ah / dims.height) * fraction;
+    const w = Math.round(dims.width * scale);
+    const h = Math.round(dims.height * scale);
     return { area_width: aw, area_height: ah, width: w, height: h, top: Math.round((ah - h) / 2), left: Math.round((aw - w) / 2) };
   };
 
-  // Build mockup payload — apply the user's pattern URL to every placement we attached
+  // Preview the real design: pattern on body panels, the clean logo on branding spots.
   const filesPayload = files.map(f => {
     const dim = detail.dims[f.type] || { width: 1800, height: 1800 };
+    const isLogoSpot = logoUrl && placementRole(f.type) === 'logo';
     return {
       placement: f.type,
-      image_url: patUrl,
-      position: fitPosition(dim.width, dim.height),
+      image_url: isLogoSpot ? logoUrl : patUrl,
+      position: isLogoSpot ? fitPosition(dim.width, dim.height, logoSize, 0.8) : fitPosition(dim.width, dim.height, design),
     };
   });
   const task = await printful.post(`/mockup-generator/create-task/${catalogId}`, {
@@ -498,7 +523,7 @@ async function runJob(job) {
         try {
           const v0 = variants[0]?.id;
           if (v0) {
-            const perm = await generateAndSetThumbnail(prod.id, v0, files, pat.url, detail, syncId);
+            const perm = await generateAndSetThumbnail(prod.id, v0, files, pat.url, detail, syncId, patLogo?.url);
             if (perm) thumbUrl = perm;
           }
         } catch (e) {

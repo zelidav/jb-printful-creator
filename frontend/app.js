@@ -596,7 +596,7 @@ async function pollJob(id, total, startedAt) {
                 <div class="meta">
                   <div class="title">${i.product_title || 'Product'}</div>
                   <div class="brand">${i.label}</div>
-                  <a target="_blank" href="https://www.printful.com/dashboard/products/${i.sync_id}" class="badge">#${i.sync_id} →</a>
+                  <a target="_blank" href="https://www.printful.com/dashboard/sync/update?id=${i.sync_id}" class="badge">#${i.sync_id} →</a>
                   ${i.placements ? `<span class="badge" title="${i.placements.join(', ')}">${i.placements.length} panel${i.placements.length > 1 ? 's' : ''}</span>` : ''}
                   ${i.wrap && i.wrap !== 'single' ? ` <span class="badge wrap">${i.wrap}</span>` : ''}
                 </div>
