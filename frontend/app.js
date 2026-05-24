@@ -599,7 +599,7 @@ async function pollJob(id, total, startedAt) {
           </div>
           <div class="progress-bar"><div style="width:100%"></div></div>`;
         $('#results').innerHTML = `
-          <p class="muted" style="margin:4px 0 16px;">Saved to your Printful <strong>library</strong>, not on any storefront. <a href="templates.html" style="color:var(--accent);">→ Go to Templates</a> to review, edit, and publish when ready.</p>
+          <p class="muted" style="margin:4px 0 16px;">Created in your <strong>JBNY Custom Shop</strong> (visible in Printful). Open one below to edit, or manage them on the <a href="templates.html" style="color:var(--accent);">Templates page</a>.</p>
           ${failItems.length ? `<div class="review-block"><h3 class="fail">${failItems.length} failed</h3>${failItems.map(i => `<div class="log-line fail">${i.label} — ${typeof i.error === 'string' ? i.error : JSON.stringify(i.error).slice(0, 160)}</div>`).join('')}</div>` : ''}
           <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(220px, 1fr))">
             ${okItems.map(i => `

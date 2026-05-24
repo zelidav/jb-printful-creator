@@ -32,12 +32,12 @@ export function attachTemplateRoutes(app, printful) {
     try {
       const r = await printful.get('/store/products?limit=100');
       const items = (r.body?.result || [])
-        .filter(p => p.is_ignored)
         .map(p => ({
           id: p.id,
           name: p.name,
           thumbnail: p.thumbnail_url,
           variant_count: p.variants,
+          hidden: !!p.is_ignored,
         }));
       res.json({ count: items.length, items });
     } catch (e) { res.status(500).json({ error: String(e) }); }

@@ -574,8 +574,8 @@ async function runJob(job) {
         }));
         const name = `${prod.title || `Product ${prod.id}`} - ${pat.label}`;
         const r = await printful.post('/store/products', {
-          // is_ignored = true → saved as a template-equivalent: in dashboard but not on storefront
-          sync_product: { name, thumbnail: pat.url, is_ignored: true },
+          // is_ignored = false → visible/live in the store (appears in Printful + on the quickshop)
+          sync_product: { name, thumbnail: pat.url, is_ignored: false },
           sync_variants,
         });
         if (r.status !== 200) {
