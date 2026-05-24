@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "deploy": "gcloud run deploy jb-printful-creator --source . --project printful-manager --region us-east1 --allow-unauthenticated"
+    "deploy": "gcloud run deploy jb-printful-creator --source . --project printful-manager --region us-east1 --allow-unauthenticated --memory 2Gi --cpu 2"
   },
   "dependencies": {
     "@google-cloud/firestore": "^8.5.0",

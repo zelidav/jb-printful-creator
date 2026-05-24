@@ -4,7 +4,7 @@ import multer from 'multer';
 import { Storage } from '@google-cloud/storage';
 import { pf } from './printful.js';
 import { memo } from './cache.js';
-import { classifyPlacements, buildShoeFiles, fitToCanvas, dimsFromPrintfiles, getPrimaryColor, solidWithLogo, compositeLogo, imageDims } from './wrap.js';
+import { classifyPlacements, buildShoeFiles, fitToCanvas, dimsFromPrintfiles, getPrimaryColor, solidWithLogo, compositeLogo, imageDims, tileToCanvas } from './wrap.js';
 import { createJob, getJob, emit, subscribe } from './jobs.js';
 import { attachShopRoutes } from './shop.js';
 import { attachTemplateRoutes } from './templates.js';
@@ -254,7 +254,8 @@ async function fetchPatternBuf(url) {
 
 async function uploadBufferToPrintful(buf, filename) {
   // Printful /files rejects data URLs — host on litterbox first to get a real URL Printful can fetch
-  const publicUrl = await hostOnLitterbox(buf, filename, 'image/png');
+  const mime = /\.jpe?g$/i.test(filename) ? 'image/jpeg' : 'image/png';
+  const publicUrl = await hostOnLitterbox(buf, filename, mime);
   const r = await printful.post('/files', { type: 'default', url: publicUrl, filename, visible: true });
   if (r.status !== 200) throw new Error('upload failed: ' + JSON.stringify(r.body).slice(0, 300));
   return { id: r.body.result.id, url: r.body.result.preview_url || publicUrl };
@@ -313,6 +314,24 @@ function containBox(aw, ah, dw, dh, fraction = 1) {
 async function imgDimsCached(url, key) {
   return memo(`imgdims:${key}`, 6 * 60 * 60 * 1000, async () => {
     try { return await imageDims(await fetchPatternBuf(url)); } catch { return null; }
+  });
+}
+
+// A position that maps an already-panel-sized image 1:1 onto the print area (no scaling).
+function exactBox(w, h) { return { area_width: w, area_height: h, width: w, height: h, top: 0, left: 0 }; }
+
+// Build a big all-over panel by TILING the pattern at the panel's exact size (full motifs,
+// repeated — no zoom/crop), optionally compositing the logo at a fractional anchor. Returns {id,url}.
+async function tiledPanelFile(pat, w, h, { logo, logoOpts } = {}) {
+  const lkey = logo ? `${logo.fileId}:${logoOpts?.xFrac}x${logoOpts?.yFrac}:${logoOpts?.scale}` : 'plain';
+  return memo(`tile:${pat.fileId}:${w}x${h}:${lkey}`, 60 * 60 * 1000, async () => {
+    const patternBuf = await fetchPatternBuf(pat.url);
+    const logoBuf = logo ? await fetchPatternBuf(logo.url) : null;
+    const buf = await tileToCanvas(patternBuf, w, h, {
+      logoBuf, logoScale: logoOpts?.scale, xFrac: logoOpts?.xFrac, yFrac: logoOpts?.yFrac,
+    });
+    const safe = (pat.label || 'pattern').replace(/[^a-z0-9]+/gi, '_');
+    return uploadBufferToPrintful(buf, `${safe}_tile_${w}x${h}${logo ? '_logo' : ''}.jpg`);
   });
 }
 
@@ -419,9 +438,19 @@ async function buildFilesForVariant(prod, pat, detail, logo) {
   const ldim = logo ? await imgDimsCached(logo.url, logo.fileId) : null;
   const areaOf = p => { const d = detail.dims[p]; return d ? (d.width || 0) * (d.height || 0) : 0; };
 
-  // Pattern COVERS its panel (fills edge-to-edge, scaled uniformly, overflow cropped — visible & clean).
-  const patFile = p => {
+  const coverScaleOf = p => {
     const a = detail.dims[p] || {};
+    if (!a.width || !pdim?.width) return 1;
+    return Math.max(a.width / pdim.width, a.height / pdim.height);
+  };
+  // A pattern panel. If covering would zoom one motif up >1.2× (big all-over panels), TILE the
+  // pattern at natural scale so full motifs repeat (no zoom/crop); otherwise cover (no zoom-up).
+  const patFile = async p => {
+    const a = detail.dims[p] || {};
+    if (coverScaleOf(p) > 1.2 && a.width && a.height) {
+      const tp = await tiledPanelFile(pat, a.width, a.height);
+      return { type: p, id: tp.id, position: exactBox(a.width, a.height), srcUrl: tp.url, fit: 'exact' };
+    }
     return { type: p, id: pat.fileId, position: coverBox(a.width, a.height, pdim?.width, pdim?.height) || undefined, srcUrl: pat.url, fit: 'cover' };
   };
 
@@ -431,55 +460,59 @@ async function buildFilesForVariant(prod, pat, detail, logo) {
   // (e.g. all-over sleeves) get the pattern instead, so NO panel is ever left blank.
   const logoSpots = usable.filter(p => placementRole(p) === 'logo' && (mainArea ? areaOf(p) <= 0.5 * mainArea : true));
 
-  // (A) Garment with small branding spots (DTG tees/hoodies): pattern covers the body,
-  //     a clean undistorted logo accents the sleeves/chest. Every panel covered.
+  // (A) Garment with small branding spots (DTG tees/hoodies): pattern on body, clean logo on sleeves/chest.
   if (logo && logoSpots.length && mainSpots.length) {
-    return usable.map(p => {
+    return Promise.all(usable.map(async p => {
       if (!logoSpots.includes(p)) return patFile(p);
       const a = detail.dims[p] || {};
       return { type: p, id: logo.fileId, position: containBox(a.width, a.height, ldim?.width, ldim?.height, 0.8), srcUrl: logo.url, fit: 'contain', fraction: 0.8 };
-    });
+    }));
   }
 
   // (B) All-over / single-surface items with NO small branding spot (swimwear, totes, cases…):
-  //     pattern covers every panel, and the logo is composited onto ONE chosen panel so it is
-  //     actually visible on the finished piece — e.g. the back/seat of a swimsuit bottom.
+  //     tile the pattern across every panel; composite the logo onto ONE panel so it's visible
+  //     on the finished piece — e.g. centered on the back/seat of a swimsuit bottom.
   if (logo) {
-    // Choose the panel + where on it the logo lands (verified on the string bikini: the RIGHT
-    // ~80% of the wide `bottom` print maps to the seat; dead-center lands in the hidden gusset).
+    // Where the logo lands (fractional anchor of the panel). Verified on the string bikini: the
+    // RIGHT ~78% of the wide `bottom` print is the seat; dead-center lands in the hidden gusset.
     let logoPanel = recipe?.logoPanel, logoOpts;
     if (logoPanel) {
-      logoOpts = { gravity: recipe.gravity, scale: recipe.scale ?? 0.25, xFrac: recipe.xFrac, yFrac: recipe.yFrac };
+      logoOpts = { gravity: recipe.gravity, scale: recipe.scale ?? 0.2, xFrac: recipe.xFrac, yFrac: recipe.yFrac };
     } else if ((logoPanel = usable.find(p => /back/i.test(p)))) {
-      logoOpts = { gravity: 'center', scale: 0.25 };                 // true back panel → centered
+      logoOpts = { xFrac: 0.5, yFrac: 0.5, scale: 0.22 };            // true back panel → centered
     } else if ((logoPanel = usable.find(p => p === 'bottom'))) {
-      logoOpts = { xFrac: 0.8, yFrac: 0.5, scale: 0.16 };            // swim seat
+      logoOpts = { xFrac: 0.78, yFrac: 0.5, scale: 0.2 };            // swim seat
     } else if (recipe?.kind === 'composite' && !recipe.onlyPlacements?.length) {
       logoPanel = usable[0];
       logoOpts = { gravity: recipe.gravity || 'center', scale: recipe.scale || 0.3 };
     }
 
     if (logoPanel) {
-      const merged = await mergeLogoOntoPattern(pat, logo, prod.id, logoOpts);
-      return usable.map(p => {
+      return Promise.all(usable.map(async p => {
         if (p !== logoPanel) return patFile(p);
         const a = detail.dims[p] || {};
+        // Big panel → tile + composite logo at exact coords; small panel → merge over the pattern.
+        if (coverScaleOf(p) > 1.2 && a.width && a.height && logoOpts.xFrac != null) {
+          const tp = await tiledPanelFile(pat, a.width, a.height, { logo, logoOpts });
+          return { type: p, id: tp.id, position: exactBox(a.width, a.height), srcUrl: tp.url, fit: 'exact' };
+        }
+        const merged = await mergeLogoOntoPattern(pat, logo, prod.id, logoOpts);
         return { type: p, id: merged.id, position: coverBox(a.width, a.height, pdim?.width, pdim?.height) || undefined, srcUrl: merged.url, fit: 'cover' };
-      });
+      }));
     }
     // Recipe restricted to specific panels (e.g. bike-shorts belt) — merged there, pattern elsewhere.
     if (recipe?.kind === 'composite' && recipe.onlyPlacements?.length) {
       const merged = await mergeLogoOntoPattern(pat, logo, prod.id, { gravity: recipe.gravity, scale: recipe.scale });
-      return usable.map(p => {
+      return Promise.all(usable.map(async p => {
+        if (!recipe.onlyPlacements.includes(p)) return patFile(p);
         const a = detail.dims[p] || {};
-        const useMerged = recipe.onlyPlacements.includes(p);
-        return { type: p, id: useMerged ? merged.id : pat.fileId, position: coverBox(a.width, a.height, pdim?.width, pdim?.height) || undefined, srcUrl: useMerged ? merged.url : pat.url, fit: 'cover' };
-      });
+        return { type: p, id: merged.id, position: coverBox(a.width, a.height, pdim?.width, pdim?.height) || undefined, srcUrl: merged.url, fit: 'cover' };
+      }));
     }
   }
 
-  // (C) No logo: pattern covers every panel
-  return usable.map(patFile);
+  // (C) No logo: pattern on every panel (tiled where it would otherwise zoom up)
+  return Promise.all(usable.map(patFile));
 }
 
 async function pollMockupTask(taskKey, maxSec = 180) {
@@ -513,11 +546,15 @@ async function generateAndSetThumbnail(catalogId, variantId, files, patUrl, deta
 
   const filesPayload = files.map(f => {
     const a = detail.dims[f.type] || { width: 1800, height: 1800 };
-    const isLogo = f.fit === 'contain';
-    const dims = isLogo ? logoSize : design; // patterns AND merged panels are pattern-sized
-    const position = isLogo
-      ? containBox(a.width, a.height, dims?.width, dims?.height, f.fraction || 0.8)
-      : (coverBox(a.width, a.height, dims?.width, dims?.height) || { area_width: a.width, area_height: a.height, width: a.width, height: a.height, top: 0, left: 0 });
+    let position;
+    if (f.fit === 'exact') {
+      // already panel-sized (tiled all-over panel) → map 1:1
+      position = { area_width: a.width, area_height: a.height, width: a.width, height: a.height, top: 0, left: 0 };
+    } else if (f.fit === 'contain') {
+      position = containBox(a.width, a.height, logoSize?.width, logoSize?.height, f.fraction || 0.8);
+    } else {
+      position = coverBox(a.width, a.height, design?.width, design?.height) || { area_width: a.width, area_height: a.height, width: a.width, height: a.height, top: 0, left: 0 };
+    }
     return { placement: f.type, image_url: f.srcUrl || patUrl, position };
   });
   const task = await printful.post(`/mockup-generator/create-task/${catalogId}`, {

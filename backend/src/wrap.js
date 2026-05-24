@@ -94,6 +94,28 @@ export async function imageDims(buf) {
   return { width: m.width || 0, height: m.height || 0 };
 }
 
+// Tile the pattern across an exact width×height canvas at a natural motif size (no zoom/crop of
+// the panel — the design simply repeats). Used for big all-over panels where covering would
+// blow one motif up 2×. Optionally composite a logo on top at a fractional anchor (e.g. the seat).
+export async function tileToCanvas(patternBuf, width, height, { tilePx, logoBuf, logoScale = 0.16, xFrac, yFrac } = {}) {
+  const t = Math.max(1, Math.round(tilePx || Math.min(width, height) / 1.5));
+  const tile = await sharp(patternBuf).resize(t, t, { fit: 'cover' }).jpeg({ quality: 88 }).toBuffer();
+  // Lay full tiles on an oversized canvas (whole multiples of t so no tile spills past the edge —
+  // sharp throws if a composite input extends beyond the base), then crop to the exact panel size.
+  const cols = Math.ceil(width / t), rows = Math.ceil(height / t);
+  const bigW = cols * t, bigH = rows * t;
+  const comp = [];
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) comp.push({ input: tile, left: c * t, top: r * t });
+  if (logoBuf && xFrac != null && yFrac != null) {
+    const logo = await sharp(logoBuf).resize({ width: Math.round(width * logoScale), fit: 'inside' }).png().toBuffer();
+    const lm = await sharp(logo).metadata();
+    comp.push({ input: logo, left: Math.round(width * xFrac - lm.width / 2), top: Math.round(height * yFrac - lm.height / 2) });
+  }
+  const big = await sharp({ create: { width: bigW, height: bigH, channels: 3, background: { r: 255, g: 255, b: 255 } } })
+    .composite(comp).jpeg({ quality: 90 }).toBuffer();
+  return sharp(big).extract({ left: 0, top: 0, width, height }).jpeg({ quality: 88 }).toBuffer();
+}
+
 // Take a Printful printfiles response and return per-placement dimensions
 export function dimsFromPrintfiles(pf) {
   const idx = {};
