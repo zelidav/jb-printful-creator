@@ -77,12 +77,18 @@ app.get('/api/catalog/:id', async (req, res) => {
         printful.get(`/mockup-generator/printfiles/${id}`),
         printful.get(`/mockup-generator/templates/${id}`),
       ]);
-      const placements = printfiles.body?.result?.printfiles?.map(p => ({
-        placement: p.placement,
-        width: p.width,
-        height: p.height,
-      })) || [];
-      const wrap = classifyPlacements(placements);
+      // Real placement names are the keys of available_placements; the printfiles[]
+      // array carries dimensions but no `placement` field (the old map produced blanks
+      // and made classifyPlacements always return 'single').
+      const pf = printfiles.body?.result || {};
+      const dims = dimsFromPrintfiles(pf);
+      const placementNames = Object.keys(pf.available_placements || {});
+      const placements = placementNames.map(name => ({
+        placement: name,
+        width: dims[name]?.width,
+        height: dims[name]?.height,
+      }));
+      const wrap = classifyPlacements(placementNames);
       return {
         info: info.body?.result || null,
         placements,
@@ -287,6 +293,42 @@ function placementRole(p) {
   return 'pattern';
 }
 
+// Aspect-preserving placement geometry (Printful `position`). Neither distorts the image.
+//   coverBox  → scale UP to fill the whole print area, crop the overflow (all-over look)
+//   containBox→ scale to fit INSIDE the area (optionally to a fraction), centered (clean accent)
+function coverBox(aw, ah, dw, dh) {
+  if (!aw || !ah || !dw || !dh) return null;
+  const s = Math.max(aw / dw, ah / dh);
+  const w = Math.round(dw * s), h = Math.round(dh * s);
+  return { area_width: aw, area_height: ah, width: w, height: h, top: Math.round((ah - h) / 2), left: Math.round((aw - w) / 2) };
+}
+function containBox(aw, ah, dw, dh, fraction = 1) {
+  if (!aw || !ah || !dw || !dh) return { area_width: aw, area_height: ah, width: aw, height: ah, top: 0, left: 0 };
+  const s = Math.min(aw / dw, ah / dh) * fraction;
+  const w = Math.round(dw * s), h = Math.round(dh * s);
+  return { area_width: aw, area_height: ah, width: w, height: h, top: Math.round((ah - h) / 2), left: Math.round((aw - w) / 2) };
+}
+
+// Pixel dims of a hosted image, memoized by file id (patterns/logos are reused across products).
+async function imgDimsCached(url, key) {
+  return memo(`imgdims:${key}`, 6 * 60 * 60 * 1000, async () => {
+    try { return await imageDims(await fetchPatternBuf(url)); } catch { return null; }
+  });
+}
+
+// Composite the logo onto the pattern (logo aspect preserved) and host it; returns {id, url}.
+async function mergeLogoOntoPattern(pat, logo, prodId, opts = {}) {
+  const { gravity = 'center', scale = 0.3, xFrac, yFrac } = opts;
+  const tag = xFrac != null ? `${xFrac}x${yFrac}` : gravity;
+  return memo(`merge:${pat.fileId}:${logo.fileId}:${prodId}:${tag}:${scale}`, 60 * 60 * 1000, async () => {
+    const patternBuf = await fetchPatternBuf(pat.url);
+    const logoBuf = await fetchPatternBuf(logo.url);
+    const buf = await compositeLogo(patternBuf, logoBuf, { gravity, scale, xFrac, yFrac });
+    const safeName = (pat.label || 'pattern').replace(/[^a-z0-9]+/gi, '_');
+    return uploadBufferToPrintful(buf, `${safeName}_${tag}_logo.png`);
+  });
+}
+
 // Per-catalog logo placement recipe (where + how to apply user's logo)
 const LOGO_RECIPES = {
   // canvas high-top: tongue = solid color of pattern + logo centered
@@ -364,48 +406,80 @@ async function buildFilesForVariant(prod, pat, detail, logo) {
   }
 
   // ---------- GENERAL MULTI-PLACEMENT ----------
-  const usable = detail.placementNames.filter(p => placementRole(p) !== 'skip');
-  if (usable.length === 0) {
-    return [{ type: detail.placementNames[0] || 'default', id: pat.fileId }];
+  const usableAll = detail.placementNames.filter(p => placementRole(p) !== 'skip');
+  if (usableAll.length === 0) {
+    return [{ type: detail.placementNames[0] || 'default', id: pat.fileId, srcUrl: pat.url, fit: 'cover' }];
   }
+  // Size-variant panels (e.g. front vs front_large) cover the same physical area — keep the
+  // LARGER one for fuller coverage and never fill both (filling both conflicts on Printful).
+  const largeBases = new Set(usableAll.filter(p => /_large$/.test(p)).map(p => p.replace(/_large$/, '')));
+  const usable = usableAll.filter(p => !largeBases.has(p));
 
-  const logoSpots = usable.filter(p => placementRole(p) === 'logo');
-  let mainSpots = usable.filter(p => placementRole(p) === 'pattern');
-  // front and front_large are the same area at two sizes — never fill both
-  if (mainSpots.includes('front') && mainSpots.includes('front_large')) {
-    mainSpots = mainSpots.filter(p => p !== 'front_large');
-  }
+  const pdim = await imgDimsCached(pat.url, pat.fileId);
+  const ldim = logo ? await imgDimsCached(logo.url, logo.fileId) : null;
+  const areaOf = p => { const d = detail.dims[p]; return d ? (d.width || 0) * (d.height || 0) : 0; };
 
-  // Fashion-designer routing: when the garment has a dedicated branding spot
-  // (sleeve, chest…), make the PATTERN the statement on the body and drop a CLEAN,
-  // undistorted logo on the branding spot — not a merged pattern+logo stamped everywhere.
+  // Pattern COVERS its panel (fills edge-to-edge, scaled uniformly, overflow cropped — visible & clean).
+  const patFile = p => {
+    const a = detail.dims[p] || {};
+    return { type: p, id: pat.fileId, position: coverBox(a.width, a.height, pdim?.width, pdim?.height) || undefined, srcUrl: pat.url, fit: 'cover' };
+  };
+
+  const mainSpots = usable.filter(p => placementRole(p) === 'pattern');
+  const mainArea = mainSpots.reduce((m, p) => Math.max(m, areaOf(p)), 0);
+  // A branding spot carries the clean logo ONLY if it's a small accent area. Large panels
+  // (e.g. all-over sleeves) get the pattern instead, so NO panel is ever left blank.
+  const logoSpots = usable.filter(p => placementRole(p) === 'logo' && (mainArea ? areaOf(p) <= 0.5 * mainArea : true));
+
+  // (A) Garment with small branding spots (DTG tees/hoodies): pattern covers the body,
+  //     a clean undistorted logo accents the sleeves/chest. Every panel covered.
   if (logo && logoSpots.length && mainSpots.length) {
-    return [
-      ...mainSpots.map(p => ({ type: p, id: pat.fileId })),
-      ...logoSpots.map(p => ({ type: p, id: logo.fileId })),
-    ];
-  }
-
-  // Single-surface items (totes, towels, cases…) have no separate logo spot —
-  // place the logo tastefully onto the pattern via the per-product recipe.
-  if (logo && recipe?.kind === 'composite') {
-    const cacheKey = `composite:${pat.fileId}:${logo.fileId}:${prod.id}`;
-    const mergedFileId = await memo(cacheKey, 60 * 60 * 1000, async () => {
-      const patternBuf = await fetchPatternBuf(pat.url);
-      const logoBuf = await fetchPatternBuf(logo.url);
-      const buf = await compositeLogo(patternBuf, logoBuf, { gravity: recipe.gravity, scale: recipe.scale });
-      const safeName = (pat.label || 'pattern').replace(/[^a-z0-9]+/gi, '_');
-      const up = await uploadBufferToPrintful(buf, `${safeName}_logo.png`);
-      return up.id;
+    return usable.map(p => {
+      if (!logoSpots.includes(p)) return patFile(p);
+      const a = detail.dims[p] || {};
+      return { type: p, id: logo.fileId, position: containBox(a.width, a.height, ldim?.width, ldim?.height, 0.8), srcUrl: logo.url, fit: 'contain', fraction: 0.8 };
     });
-    if (recipe.onlyPlacements?.length) {
-      return usable.map(p => ({ type: p, id: recipe.onlyPlacements.includes(p) ? mergedFileId : pat.fileId }));
-    }
-    return usable.map(p => ({ type: p, id: mergedFileId }));
   }
 
-  // No logo / no recipe: pattern on every usable placement
-  return usable.map(p => ({ type: p, id: pat.fileId }));
+  // (B) All-over / single-surface items with NO small branding spot (swimwear, totes, cases…):
+  //     pattern covers every panel, and the logo is composited onto ONE chosen panel so it is
+  //     actually visible on the finished piece — e.g. the back/seat of a swimsuit bottom.
+  if (logo) {
+    // Choose the panel + where on it the logo lands (verified on the string bikini: the RIGHT
+    // ~80% of the wide `bottom` print maps to the seat; dead-center lands in the hidden gusset).
+    let logoPanel = recipe?.logoPanel, logoOpts;
+    if (logoPanel) {
+      logoOpts = { gravity: recipe.gravity, scale: recipe.scale ?? 0.25, xFrac: recipe.xFrac, yFrac: recipe.yFrac };
+    } else if ((logoPanel = usable.find(p => /back/i.test(p)))) {
+      logoOpts = { gravity: 'center', scale: 0.25 };                 // true back panel → centered
+    } else if ((logoPanel = usable.find(p => p === 'bottom'))) {
+      logoOpts = { xFrac: 0.8, yFrac: 0.5, scale: 0.16 };            // swim seat
+    } else if (recipe?.kind === 'composite' && !recipe.onlyPlacements?.length) {
+      logoPanel = usable[0];
+      logoOpts = { gravity: recipe.gravity || 'center', scale: recipe.scale || 0.3 };
+    }
+
+    if (logoPanel) {
+      const merged = await mergeLogoOntoPattern(pat, logo, prod.id, logoOpts);
+      return usable.map(p => {
+        if (p !== logoPanel) return patFile(p);
+        const a = detail.dims[p] || {};
+        return { type: p, id: merged.id, position: coverBox(a.width, a.height, pdim?.width, pdim?.height) || undefined, srcUrl: merged.url, fit: 'cover' };
+      });
+    }
+    // Recipe restricted to specific panels (e.g. bike-shorts belt) — merged there, pattern elsewhere.
+    if (recipe?.kind === 'composite' && recipe.onlyPlacements?.length) {
+      const merged = await mergeLogoOntoPattern(pat, logo, prod.id, { gravity: recipe.gravity, scale: recipe.scale });
+      return usable.map(p => {
+        const a = detail.dims[p] || {};
+        const useMerged = recipe.onlyPlacements.includes(p);
+        return { type: p, id: useMerged ? merged.id : pat.fileId, position: coverBox(a.width, a.height, pdim?.width, pdim?.height) || undefined, srcUrl: useMerged ? merged.url : pat.url, fit: 'cover' };
+      });
+    }
+  }
+
+  // (C) No logo: pattern covers every panel
+  return usable.map(patFile);
 }
 
 async function pollMockupTask(taskKey, maxSec = 180) {
@@ -431,32 +505,20 @@ async function pollPrintfulFile(fileId, maxSec = 60) {
 }
 
 async function generateAndSetThumbnail(catalogId, variantId, files, patUrl, detail, syncId, logoUrl) {
-  // Fit each image into its print area WITHOUT distorting it. We never stretch to the
-  // area's aspect (that warps logos); we scale by the smaller ratio (contain) and center.
-  let design = null, logoSize = null;
-  try { design = await imageDims(await fetchPatternBuf(patUrl)); } catch { /* fall back to area fill */ }
-  if (logoUrl) { try { logoSize = await imageDims(await fetchPatternBuf(logoUrl)); } catch { /* ignore */ } }
+  // Render EXACTLY what will print: each file carries its source image (srcUrl) and fit
+  // ('cover' for patterns/merged panels, 'contain' for clean logo accents). Aspect is always
+  // preserved — cover scales up & crops, contain fits inside; we never stretch to the area.
+  const design = await imageDims(await fetchPatternBuf(patUrl)).catch(() => null);
+  const logoSize = logoUrl ? await imgDimsCached(logoUrl, 'mockup-logo:' + logoUrl).catch(() => null) : null;
 
-  // fraction < 1 leaves breathing room (logos sit as a clean accent, not edge-to-edge)
-  const fitPosition = (aw, ah, dims, fraction = 1) => {
-    if (!dims?.width || !dims?.height) {
-      return { area_width: aw, area_height: ah, width: aw, height: ah, top: 0, left: 0 };
-    }
-    const scale = Math.min(aw / dims.width, ah / dims.height) * fraction;
-    const w = Math.round(dims.width * scale);
-    const h = Math.round(dims.height * scale);
-    return { area_width: aw, area_height: ah, width: w, height: h, top: Math.round((ah - h) / 2), left: Math.round((aw - w) / 2) };
-  };
-
-  // Preview the real design: pattern on body panels, the clean logo on branding spots.
   const filesPayload = files.map(f => {
-    const dim = detail.dims[f.type] || { width: 1800, height: 1800 };
-    const isLogoSpot = logoUrl && placementRole(f.type) === 'logo';
-    return {
-      placement: f.type,
-      image_url: isLogoSpot ? logoUrl : patUrl,
-      position: isLogoSpot ? fitPosition(dim.width, dim.height, logoSize, 0.8) : fitPosition(dim.width, dim.height, design),
-    };
+    const a = detail.dims[f.type] || { width: 1800, height: 1800 };
+    const isLogo = f.fit === 'contain';
+    const dims = isLogo ? logoSize : design; // patterns AND merged panels are pattern-sized
+    const position = isLogo
+      ? containBox(a.width, a.height, dims?.width, dims?.height, f.fraction || 0.8)
+      : (coverBox(a.width, a.height, dims?.width, dims?.height) || { area_width: a.width, area_height: a.height, width: a.width, height: a.height, top: 0, left: 0 });
+    return { placement: f.type, image_url: f.srcUrl || patUrl, position };
   });
   const task = await printful.post(`/mockup-generator/create-task/${catalogId}`, {
     variant_ids: [variantId],
@@ -498,10 +560,17 @@ async function runJob(job) {
         emit(job, { type: 'item-info', label, wrap: detail.wrap.kind, placements: detail.placementNames });
         const variants = detail.info?.variants || [];
         const files = await buildFilesForVariant(prod, pat, detail, patLogo);
+        // Printful only wants type/id/position/options — strip our internal mockup hints.
+        const printfulFiles = files.map(f => {
+          const o = { type: f.type, id: f.id };
+          if (f.position) o.position = f.position;
+          if (f.options) o.options = f.options;
+          return o;
+        });
         const sync_variants = variants.map(v => ({
           variant_id: v.id,
           retail_price: retailPrices[prod.id] || prod.retail || '29.00',
-          files,
+          files: printfulFiles,
         }));
         const name = `${prod.title || `Product ${prod.id}`} - ${pat.label}`;
         const r = await printful.post('/store/products', {

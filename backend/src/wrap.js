@@ -70,13 +70,21 @@ export async function solidWithLogo({ width, height, color, logoBuf, logoScale =
     .toBuffer();
 }
 
-// Composite logo onto pattern at a given gravity + scale.
+// Composite logo onto pattern. Position by sharp `gravity`, OR by fractional anchor
+// {xFrac,yFrac} placing the logo's CENTER at that fraction of the pattern (e.g. 0.8,0.5
+// to land on a swimsuit's back/seat after the panel is cover-cropped).
 // ASPECT RULE: the logo is only ever scaled by width (height auto) with fit:'inside',
 // so its aspect ratio is never altered. Do not pass an explicit height here.
-export async function compositeLogo(patternBuf, logoBuf, { gravity = 'center', scale = 0.25 } = {}) {
+export async function compositeLogo(patternBuf, logoBuf, { gravity = 'center', scale = 0.25, xFrac, yFrac } = {}) {
   const meta = await sharp(patternBuf).metadata();
   const targetW = Math.round(meta.width * scale);
   const resized = await sharp(logoBuf).resize({ width: targetW, fit: 'inside' }).png().toBuffer();
+  if (xFrac != null && yFrac != null) {
+    const lm = await sharp(resized).metadata();
+    const left = Math.round(meta.width * xFrac - lm.width / 2);
+    const top = Math.round(meta.height * yFrac - lm.height / 2);
+    return sharp(patternBuf).composite([{ input: resized, left, top }]).png().toBuffer();
+  }
   return sharp(patternBuf).composite([{ input: resized, gravity }]).png().toBuffer();
 }
 
