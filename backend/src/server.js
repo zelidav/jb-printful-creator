@@ -43,7 +43,12 @@ app.get('/api/catalog', async (req, res) => {
   try {
     const list = await memo('catalog', 24 * 60 * 60 * 1000, async () => {
       const r = await printful.get('/products');
-      return r.body?.result || [];
+      // Fail loud: a bad STORE_ID/token returns 200-shaped errors or a string in `result`.
+      // Never cache that as the catalog — it renders as imageless ghost cards.
+      if (r.status !== 200 || !Array.isArray(r.body?.result)) {
+        throw new Error(`Printful /products failed (status ${r.status}): ${JSON.stringify(r.body?.error || r.body?.result || r.body).slice(0, 200)}`);
+      }
+      return r.body.result;
     });
     const q = (req.query.q || '').toLowerCase();
     const cat = req.query.category;
@@ -238,6 +243,9 @@ async function getCatalogDetail(catalogId) {
       printful.get(`/products/${catalogId}`),
       printful.get(`/mockup-generator/printfiles/${catalogId}`),
     ]);
+    if (info.status !== 200 || pfRes.status !== 200) {
+      throw new Error(`Printful detail for catalog #${catalogId} failed (info ${info.status}, printfiles ${pfRes.status}): ${JSON.stringify(info.body?.error || pfRes.body?.error || info.body?.result).slice(0, 200)}`);
+    }
     const pf = pfRes.body?.result || {};
     const placementNames = Object.keys(pf.available_placements || {});
     return {

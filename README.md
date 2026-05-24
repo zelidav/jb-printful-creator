@@ -36,7 +36,7 @@ cd backend
 gcloud config set project jb-printful
 gcloud run deploy jb-printful-api \
   --source . --region us-central1 --allow-unauthenticated \
-  --set-env-vars PRINTFUL_TOKEN=...,APP_PASSWORD=...,STORE_ID=18085643,ALLOWED_ORIGIN=https://zelidav.github.io
+  --set-env-vars PRINTFUL_TOKEN=...,APP_PASSWORD=...,STORE_ID=17892252,ALLOWED_ORIGIN=https://zelidav.github.io
 ```
 
 **Frontend → GitHub Pages**: push to `main` and the workflow auto-deploys.

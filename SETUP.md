@@ -16,7 +16,7 @@ gcloud run deploy jb-printful-api \
   --source . \
   --region us-central1 \
   --allow-unauthenticated \
-  --set-env-vars "PRINTFUL_TOKEN=FluY9TemGwmWyJ8nFPssDHNRx66injd7UXg3ba5l,STORE_ID=18085643,APP_PASSWORD=CHANGE_ME,ALLOWED_ORIGIN=https://zelidav.github.io"
+  --set-env-vars "PRINTFUL_TOKEN=FluY9TemGwmWyJ8nFPssDHNRx66injd7UXg3ba5l,STORE_ID=17892252,APP_PASSWORD=CHANGE_ME,ALLOWED_ORIGIN=https://zelidav.github.io"
 ```
 
 After deploy, gcloud prints a service URL like `https://jb-printful-api-abc123-uc.a.run.app`. Save it — you'll paste it into the frontend login.
