@@ -257,12 +257,19 @@ async function openDropPicker(onPick) {
       const it = items[parseInt(card.dataset.idx)];
       card.classList.add('loading');
       card.insertAdjacentHTML('beforeend', '<div class="loading-overlay">Ingesting…</div>');
+      const overlay = card.querySelector('.loading-overlay');
       try {
-        const data = await ingestUrlAsPattern(it);
+        const pattern = await ingestUrlAsPattern(it);
+        // Auto-pair the strain's launch-collection logo so the design is complete in one click
+        let logo = null;
+        if (it.logo?.url) {
+          overlay.textContent = 'Ingesting logo…';
+          logo = await ingestUrlAsPattern({ url: it.logo.url, file: it.logo.file, label: it.logo.label });
+        }
         close();
-        onPick(data);
+        onPick({ pattern, logo });
       } catch (err) {
-        card.querySelector('.loading-overlay').textContent = 'Failed: ' + err.message;
+        overlay.textContent = 'Failed: ' + err.message;
       }
     };
   });
@@ -347,9 +354,10 @@ function renderUploadCell(role, design, idx) {
       renderPatterns();
     });
     const browseBtn = cell.querySelector('.browse-drops');
-    if (browseBtn) browseBtn.onclick = () => openDropPicker(data => {
-      state.designs[idx].pattern = data;
-      if (!state.designs[idx].label) state.designs[idx].label = data.name;
+    if (browseBtn) browseBtn.onclick = () => openDropPicker(({ pattern, logo }) => {
+      state.designs[idx].pattern = pattern;
+      if (logo) state.designs[idx].logo = logo;  // strain logo auto-paired
+      if (!state.designs[idx].label) state.designs[idx].label = pattern.name;
       renderPatterns();
     });
   }

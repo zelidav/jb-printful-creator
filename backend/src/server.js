@@ -138,24 +138,32 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
-// Curated JBD drop pattern presets — assets live in the same GCS bucket under drops/<slug>/
-const DROP_PATTERNS = [
-  { drop: 'ny-2026-drop-1', dropLabel: 'NY 2026 Drop 1', label: 'Hybrid pattern',  file: 'hybrid_pattern.jpg',  mime: 'image/jpeg', lowRes: true },
-  { drop: 'ny-2026-drop-1', dropLabel: 'NY 2026 Drop 1', label: 'Indica pattern',  file: 'indica_pattern.jpg',  mime: 'image/jpeg', lowRes: true },
-  { drop: 'ny-2026-drop-1', dropLabel: 'NY 2026 Drop 1', label: 'Sativa pattern',  file: 'sativa_pattern.jpg',  mime: 'image/jpeg', lowRes: true },
-  { drop: 'drop1-strains',  dropLabel: 'Strain Artwork',  label: 'Cherry Gushers', file: 'cherry-gushers.jpg', mime: 'image/jpeg' },
-  { drop: 'drop1-strains',  dropLabel: 'Strain Artwork',  label: 'Double Runtz',   file: 'double-runtz.jpg',   mime: 'image/jpeg' },
-  { drop: 'drop1-strains',  dropLabel: 'Strain Artwork',  label: 'Grape Nana',     file: 'grape-nana.jpg',     mime: 'image/jpeg' },
-  { drop: 'drop1-strains',  dropLabel: 'Strain Artwork',  label: 'Haze',           file: 'haze.jpg',           mime: 'image/jpeg' },
-  { drop: 'drop1-strains',  dropLabel: 'Strain Artwork',  label: 'Hella Jelly',    file: 'hella-jelly.jpg',    mime: 'image/jpeg' },
-  { drop: 'drop1-strains',  dropLabel: 'Strain Artwork',  label: 'NYC Diesel',     file: 'nyc-diesel.jpg',     mime: 'image/jpeg' },
-  { drop: 'drop1-strains',  dropLabel: 'Strain Artwork',  label: 'Super Boof',     file: 'super-boof.jpg',     mime: 'image/jpeg' },
-];
+// Curated JBD drop art — hi-res originals mirrored from Drive into the GCS bucket under drops/<slug>/.
+// Each strain has a Pattern + a Solid, and both pair with that strain's launch-collection logo.
+const DROP_SLUG = 'ny-2026-drop-1';
+const DROP_LABEL = 'NY 2026 Drop 1';
+const DROP_STRAINS = ['Indica', 'Sativa', 'Hybrid'];
+
+const DROP_PATTERNS = DROP_STRAINS.flatMap(strain => {
+  const s = strain.toLowerCase();
+  const logoFile = `${s}_logo.png`;
+  return [
+    { drop: DROP_SLUG, dropLabel: DROP_LABEL, strain, kind: 'pattern', label: `${strain} Pattern`, file: `${s}_pattern.jpg`, mime: 'image/jpeg', logoFile },
+    { drop: DROP_SLUG, dropLabel: DROP_LABEL, strain, kind: 'solid',   label: `${strain} Solid`,   file: `${s}_solid.jpg`,   mime: 'image/jpeg', logoFile },
+  ];
+});
+
+// Bump when re-uploading drop art — objects use immutable cache-control, so a version
+// query param is required to bust Google's edge cache after an overwrite.
+const DROP_ART_VERSION = '2';
 
 app.get('/api/drop-patterns', (req, res) => {
+  const base = `https://storage.googleapis.com/${UPLOAD_BUCKET}/drops`;
+  const v = `?v=${DROP_ART_VERSION}`;
   const items = DROP_PATTERNS.map(p => ({
-    ...p,
-    url: `https://storage.googleapis.com/${UPLOAD_BUCKET}/drops/${p.drop}/${p.file}`,
+    drop: p.drop, dropLabel: p.dropLabel, strain: p.strain, kind: p.kind, label: p.label, file: p.file, mime: p.mime,
+    url: `${base}/${p.drop}/${p.file}${v}`,
+    logo: { label: `${p.strain} Logo`, file: p.logoFile, mime: 'image/png', url: `${base}/${p.drop}/${p.logoFile}${v}` },
   }));
   res.json({ items });
 });
