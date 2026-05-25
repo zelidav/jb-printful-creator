@@ -318,11 +318,16 @@ async function getCatalogDetail(catalogId) {
     }
     const pf = pfRes.body?.result || {};
     const available = Object.keys(pf.available_placements || {});
-    // Some products expose PRINT placements only in product.files (not in mockup available_placements) —
-    // e.g. front_dtf_hat on a foam trucker. Merge those in so routing PREFERS print over embroidery.
-    const fileTypes = (info.body?.result?.product?.files || []).map(f => f.type).filter(Boolean);
-    const printFileTypes = fileTypes.filter(t => !/^embroidery_/.test(t) && !['preview', 'mockup', 'default'].includes(t));
-    const placementNames = [...new Set([...available, ...printFileTypes])];
+    // Only when the mockup data exposes NO printable placement (e.g. an embroidery-only hat that
+    // also has a hidden front_dtf_hat) do we pull print placements from product.files. If front/back
+    // already exist, adding the DTF-variant file types (front_dtf_tote…) duplicates the same area
+    // with a different technique and Printful rejects the whole product.
+    let placementNames = available;
+    if (!available.some(p => placementRole(p) !== 'skip')) {
+      const fileTypes = (info.body?.result?.product?.files || []).map(f => f.type).filter(Boolean);
+      const printFileTypes = fileTypes.filter(t => !/^embroidery_/.test(t) && !['preview', 'mockup', 'default'].includes(t));
+      placementNames = [...new Set([...available, ...printFileTypes])];
+    }
     return {
       info: info.body?.result || null,
       placementNames,
@@ -563,14 +568,13 @@ async function buildFilesForVariant(prod, pat, detail, logo) {
     // RIGHT ~78% of the wide `bottom` print is the seat; dead-center lands in the hidden gusset.
     let logoPanel = recipe?.logoPanel, logoOpts;
     if (logoPanel) {
-      logoOpts = { gravity: recipe.gravity, scale: recipe.scale ?? 0.2, xFrac: recipe.xFrac, yFrac: recipe.yFrac };
-    } else if ((logoPanel = usable.find(p => /back/i.test(p)))) {
-      logoOpts = { xFrac: 0.5, yFrac: 0.5, scale: 0.22 };            // true back panel → centered
+      logoOpts = { gravity: recipe.gravity, scale: recipe.scale ?? 0.4, xFrac: recipe.xFrac, yFrac: recipe.yFrac };
     } else if ((logoPanel = usable.find(p => p === 'bottom'))) {
-      logoOpts = { xFrac: 0.78, yFrac: 0.5, scale: 0.2 };            // swim seat
-    } else if (recipe?.kind === 'composite' && !recipe.onlyPlacements?.length) {
-      logoPanel = usable[0];
-      logoOpts = { gravity: recipe.gravity || 'center', scale: recipe.scale || 0.3 };
+      logoOpts = { xFrac: 0.78, yFrac: 0.5, scale: 0.2 };            // swimsuit seat (right ~78% of the wide bottom print)
+    } else {
+      // Display side: prefer FRONT, never default the logo onto a hidden back panel. Sized prominent.
+      logoPanel = usable.find(p => /front/i.test(p)) || usable.find(p => !/back/i.test(p)) || usable[0];
+      logoOpts = { xFrac: 0.5, yFrac: 0.5, scale: 0.4 };
     }
 
     if (logoPanel) {
@@ -656,12 +660,10 @@ async function generateAndSetThumbnail(catalogId, variantId, files, patUrl, deta
   const flat = result.mockups.flatMap(m => [{ url: m.mockup_url }, ...(m.extra || []).map(e => ({ url: e.url, title: e.title }))]);
   const chosen = flat.find(m => /lifestyle/i.test(m.url)) || flat[0];
 
-  // Permanentize on Printful CDN
-  const ingest = await printful.post('/files', { type: 'default', url: chosen.url, filename: `mockup_${syncId}.jpg`, visible: false });
-  if (ingest.status !== 200) throw new Error(`mockup ingest ${ingest.status}: ${JSON.stringify(ingest.body).slice(0, 200)}`);
-  const ready = await pollPrintfulFile(ingest.body.result.id);
-  const permUrl = ready?.preview_url;
-  if (!permUrl) throw new Error('mockup permanentize: no preview_url');
+  // Permanentize on OUR GCS bucket (instant). Re-ingesting into Printful's /files can take minutes
+  // to reach status:ok, blowing past any poll and leaving the raw-pattern fallback (the bikini/case bug).
+  const buf = await fetchPatternBuf(chosen.url);
+  const permUrl = await hostOnGcs(buf, `mockup_${syncId}.jpg`, 'image/jpeg');
 
   // Update the sync_product thumbnail
   await printful.put(`/store/products/${syncId}`, { sync_product: { thumbnail: permUrl } });
