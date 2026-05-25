@@ -9,6 +9,8 @@ const state = {
   ],
   wrapInfo: new Map(),  // catalog_id -> { wrap, placements, templates }
   wrapChoices: new Map(), // catalog_id -> 'tile' | 'mirror' | 'separate'
+  prices: {},           // catalog_id -> min blank price (loaded async)
+  sort: 'featured',     // 'featured' | 'price-asc' | 'price-desc'
 };
 
 const $ = sel => document.querySelector(sel);
@@ -46,6 +48,13 @@ async function doLogin() {
     $('#app').hidden = false;
     $('#auth-status').textContent = `${state.catalog.length} catalog items loaded`;
     renderCatalog();
+    // Prices load in the background (per-product on the server, cached) — enable price sort when ready.
+    api('/api/catalog/prices').then(r => {
+      state.prices = r.prices || {};
+      const sortSel = document.getElementById('catalog-sort');
+      if (sortSel) sortSel.querySelectorAll('option[value^="price"]').forEach(o => { o.disabled = false; });
+      renderCatalog();
+    }).catch(() => {});
   } catch (e) {
     $('#login-msg').textContent = 'Login failed: ' + e.message;
     $('#login-msg').className = 'msg error';
@@ -87,6 +96,7 @@ function makeProductCard(p) {
   const isSel = state.selected.has(p.id);
   const card = document.createElement('div');
   card.className = 'product-card' + (isSel ? ' selected' : '');
+  const price = state.prices[p.id];
   card.innerHTML = `
     <div class="sel-check" aria-hidden="true">✓</div>
     <img loading="lazy" src="${p.image || ''}" alt="">
@@ -94,6 +104,7 @@ function makeProductCard(p) {
       <div class="title">${p.title || 'Untitled'}</div>
       <div class="brand">${p.brand || ''}</div>
       <span class="badge">#${p.id}</span>
+      ${price != null ? `<span class="badge price">from $${price.toFixed(2)}</span>` : ''}
     </div>`;
   card.onclick = () => {
     if (state.selected.has(p.id)) state.selected.delete(p.id);
@@ -159,6 +170,20 @@ function renderCatalog() {
 
   updateSelTray();
 
+  // Price sort → flat list (groups don't apply); products without a known price sort last.
+  if (state.sort === 'price-asc' || state.sort === 'price-desc') {
+    const dir = state.sort === 'price-asc' ? 1 : -1;
+    const priced = [...filtered].sort((a, b) => {
+      const pa = state.prices[a.id], pb = state.prices[b.id];
+      if (pa == null && pb == null) return 0;
+      if (pa == null) return 1;
+      if (pb == null) return -1;
+      return (pa - pb) * dir;
+    });
+    priced.forEach(p => grid.appendChild(makeProductCard(p)));
+    return;
+  }
+
   if (q) {
     filtered.forEach(p => grid.appendChild(makeProductCard(p)));
     return;
@@ -197,6 +222,8 @@ $('#catalog-search').oninput = () => {
   clearTimeout(catalogTimer);
   catalogTimer = setTimeout(renderCatalog, 150);
 };
+const catalogSort = document.getElementById('catalog-sort');
+if (catalogSort) catalogSort.onchange = () => { state.sort = catalogSort.value; renderCatalog(); };
 
 // ---------- DESIGN SLOTS (pattern + logo per design) ----------
 async function uploadOne(file) {

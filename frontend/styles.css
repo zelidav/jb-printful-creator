@@ -61,6 +61,8 @@ main { padding: 0 24px 40px; }
 
 .bar { display: flex; gap: 16px; align-items: center; margin-bottom: 16px; }
 .bar input { flex: 1; padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; color: var(--fg); font: inherit; }
+.bar select { padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; color: var(--fg); font: inherit; }
+.product-card .badge.price { background: #1f3a2e; color: var(--accent); }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
 .catalog-group { grid-column: 1 / -1; padding: 20px 4px 6px; font-size: 13px; font-weight: 600; color: var(--accent-2); text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--line); }

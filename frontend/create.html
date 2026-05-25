@@ -38,6 +38,11 @@
     <p class="step-help">Click products to select them. Each one becomes a template for every design you add next.</p>
     <div class="bar">
       <input id="catalog-search" placeholder="Search catalog (e.g. tee, hoodie, mug)" />
+      <select id="catalog-sort" title="Sort">
+        <option value="featured">Featured</option>
+        <option value="price-asc" disabled>Price: low → high</option>
+        <option value="price-desc" disabled>Price: high → low</option>
+      </select>
       <span class="muted"><span id="catalog-count">0</span> products · <span id="selected-count">0</span> selected</span>
     </div>
     <div id="catalog-grid" class="grid"></div>

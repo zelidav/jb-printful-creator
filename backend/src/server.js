@@ -47,17 +47,63 @@ function isEmbroideryOnlyProduct(p) {
   return techs.length > 0 && !techs.some(t => PRINTABLE_TECHNIQUES.has(t));
 }
 
+// Full Printful catalog list (memoized 24h). Throws loud on a bad store/token.
+async function getCatalogList() {
+  return memo('catalog', 24 * 60 * 60 * 1000, async () => {
+    const r = await printful.get('/products');
+    if (r.status !== 200 || !Array.isArray(r.body?.result)) {
+      throw new Error(`Printful /products failed (status ${r.status}): ${JSON.stringify(r.body?.error || r.body?.result || r.body).slice(0, 200)}`);
+    }
+    return r.body.result;
+  });
+}
+
+// Run fn over items with bounded concurrency (Printful rate-limits; the client also backs off on 429).
+async function mapLimit(items, limit, fn) {
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) { const idx = i++; await fn(items[idx], idx); }
+  }));
+}
+
+// Min blank (Printful) price per catalog product, persisted to GCS so it survives cold starts.
+const PRICES_GCS_KEY = 'catalog/prices.json';
+let pricesCache = null;
+async function computeCatalogPrices() {
+  const list = (await getCatalogList()).filter(p => !isEmbroideryOnlyProduct(p));
+  const prices = {};
+  await mapLimit(list, 6, async (p) => {
+    try {
+      const vmap = await memo(`catalog-prices:${p.id}`, 6 * 60 * 60 * 1000, async () => {
+        const r = await printful.get(`/products/${p.id}`);
+        const out = {};
+        for (const v of (r.body?.result?.variants || [])) { const n = parseFloat(v.price); if (n > 0) out[v.id] = n; }
+        return out;
+      });
+      const vals = Object.values(vmap);
+      if (vals.length) prices[p.id] = Math.min(...vals);
+    } catch { /* skip products that error */ }
+  });
+  return prices;
+}
+
+app.get('/api/catalog/prices', async (req, res) => {
+  try {
+    if (req.query.refresh) { pricesCache = null; }
+    if (!pricesCache) {
+      try { const [buf] = await uploadBucket.file(PRICES_GCS_KEY).download(); pricesCache = JSON.parse(buf.toString()); } catch { /* not cached yet */ }
+    }
+    if (!pricesCache || req.query.refresh) {
+      pricesCache = await computeCatalogPrices();
+      try { await uploadBucket.file(PRICES_GCS_KEY).save(JSON.stringify(pricesCache), { contentType: 'application/json' }); } catch (e) { console.error('prices save failed', e); }
+    }
+    res.json({ count: Object.keys(pricesCache).length, prices: pricesCache });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
 app.get('/api/catalog', async (req, res) => {
   try {
-    const list = await memo('catalog', 24 * 60 * 60 * 1000, async () => {
-      const r = await printful.get('/products');
-      // Fail loud: a bad STORE_ID/token returns 200-shaped errors or a string in `result`.
-      // Never cache that as the catalog — it renders as imageless ghost cards.
-      if (r.status !== 200 || !Array.isArray(r.body?.result)) {
-        throw new Error(`Printful /products failed (status ${r.status}): ${JSON.stringify(r.body?.error || r.body?.result || r.body).slice(0, 200)}`);
-      }
-      return r.body.result;
-    });
+    const list = await getCatalogList();
     const q = (req.query.q || '').toLowerCase();
     const cat = req.query.category;
     // Drop embroidery/knitwear-only products — they can't be made from a raster design and break runs.
