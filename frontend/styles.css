@@ -160,5 +160,10 @@ main { padding: 0 24px 40px; }
 .drop-card img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; background: #000; }
 .drop-card .drop-label { margin-top: 6px; font-size: 12px; }
 .drop-card .lowres { display: inline-block; margin-left: 4px; padding: 1px 5px; font-size: 9px; border-radius: 3px; background: #3a2a1a; color: var(--accent-2); vertical-align: middle; }
+.drop-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.drop-card .drop-check { position: absolute; top: 6px; right: 6px; z-index: 2; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #001b14; font-size: 13px; font-weight: 800; display: none; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
+.drop-card.selected .drop-check { display: flex; }
+.drop-modal-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; border-top: 1px solid var(--line); }
+.drop-modal-foot .primary { background: var(--accent); color: #001b14; border-color: var(--accent); font-weight: 700; }
 .drop-card.loading { opacity: 0.6; pointer-events: none; }
 .drop-card .loading-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.6); border-radius: 8px; font-size: 12px; color: var(--accent); }

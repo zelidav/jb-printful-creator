@@ -262,7 +262,9 @@ async function ingestUrlAsPattern(item) {
   };
 }
 
-async function openDropPicker(onPick) {
+// Multi-select drop picker. Calls onPickMany([{pattern, logo}]) — one entry per selected art,
+// each with its strain logo auto-paired. The caller turns each into its own design.
+async function openDropPicker(onPickMany) {
   const items = await fetchDropPatterns();
   const modal = document.createElement('div');
   modal.className = 'drop-modal';
@@ -272,8 +274,9 @@ async function openDropPicker(onPick) {
     <div class="drop-group">
       <h3>${drop}</h3>
       <div class="drop-grid">
-        ${list.map((it, i) => `
+        ${list.map(it => `
           <div class="drop-card" data-idx="${items.indexOf(it)}">
+            <div class="drop-check" aria-hidden="true">✓</div>
             <img src="${it.url}" alt="${it.label}">
             <div class="drop-label">${it.label}${it.lowRes ? ' <span class="lowres">LOW RES</span>' : ''}</div>
           </div>
@@ -288,32 +291,48 @@ async function openDropPicker(onPick) {
         <button class="drop-close">×</button>
       </div>
       <div class="drop-modal-body">${groupHtml}</div>
+      <div class="drop-modal-foot">
+        <span class="muted">Click to select one or more — each becomes its own design.</span>
+        <button class="primary drop-add" disabled>Add design</button>
+      </div>
     </div>`;
   document.body.appendChild(modal);
   const close = () => modal.remove();
   modal.querySelector('.drop-close').onclick = close;
   modal.onclick = e => { if (e.target === modal) close(); };
+
+  const selected = new Set();
+  const addBtn = modal.querySelector('.drop-add');
+  const refresh = () => {
+    addBtn.disabled = selected.size === 0;
+    addBtn.textContent = selected.size ? `Add ${selected.size} design${selected.size > 1 ? 's' : ''}` : 'Add design';
+  };
   modal.querySelectorAll('.drop-card').forEach(card => {
-    card.onclick = async () => {
-      const it = items[parseInt(card.dataset.idx)];
-      card.classList.add('loading');
-      card.insertAdjacentHTML('beforeend', '<div class="loading-overlay">Ingesting…</div>');
-      const overlay = card.querySelector('.loading-overlay');
-      try {
-        const pattern = await ingestUrlAsPattern(it);
-        // Auto-pair the strain's launch-collection logo so the design is complete in one click
-        let logo = null;
-        if (it.logo?.url) {
-          overlay.textContent = 'Ingesting logo…';
-          logo = await ingestUrlAsPattern({ url: it.logo.url, file: it.logo.file, label: it.logo.label });
-        }
-        close();
-        onPick({ pattern, logo });
-      } catch (err) {
-        overlay.textContent = 'Failed: ' + err.message;
-      }
+    card.onclick = () => {
+      const idx = parseInt(card.dataset.idx);
+      if (selected.has(idx)) { selected.delete(idx); card.classList.remove('selected'); }
+      else { selected.add(idx); card.classList.add('selected'); }
+      refresh();
     };
   });
+  addBtn.onclick = async () => {
+    if (!selected.size) return;
+    addBtn.disabled = true;
+    const picks = [];
+    let done = 0;
+    for (const idx of selected) {
+      const it = items[idx];
+      addBtn.textContent = `Ingesting ${++done}/${selected.size}…`;
+      try {
+        const pattern = await ingestUrlAsPattern(it);
+        let logo = null;
+        if (it.logo?.url) logo = await ingestUrlAsPattern({ url: it.logo.url, file: it.logo.file, label: it.logo.label });
+        picks.push({ pattern, logo });
+      } catch (err) { /* skip an art that fails to ingest */ }
+    }
+    close();
+    onPickMany(picks);
+  };
 }
 
 function dpiClass(dim, role) {
@@ -362,10 +381,11 @@ async function pickAndUpload(role, slotEl, onDone) {
 }
 
 function ensureSlots() {
-  // ensure at least one empty slot trailing
-  if (state.designs.length < 3) {
-    const last = state.designs[state.designs.length - 1];
-    if (last && (last.pattern || last.logo || last.label)) state.designs.push({ label: '', pattern: null, logo: null });
+  // Keep one trailing empty slot so more designs can always be added (multiselect can add many).
+  const MAX = 24;
+  const last = state.designs[state.designs.length - 1];
+  if (state.designs.length < MAX && last && (last.pattern || last.logo || last.label)) {
+    state.designs.push({ label: '', pattern: null, logo: null });
   }
 }
 
@@ -395,10 +415,15 @@ function renderUploadCell(role, design, idx) {
       renderPatterns();
     });
     const browseBtn = cell.querySelector('.browse-drops');
-    if (browseBtn) browseBtn.onclick = () => openDropPicker(({ pattern, logo }) => {
-      state.designs[idx].pattern = pattern;
-      if (logo) state.designs[idx].logo = logo;  // strain logo auto-paired
-      if (!state.designs[idx].label) state.designs[idx].label = pattern.name;
+    if (browseBtn) browseBtn.onclick = () => openDropPicker(picks => {
+      // First pick fills this slot; the rest are appended as their own designs.
+      picks.forEach((pk, k) => {
+        const target = k === 0 ? state.designs[idx] : { label: '', pattern: null, logo: null };
+        target.pattern = pk.pattern;
+        if (pk.logo) target.logo = pk.logo;  // strain logo auto-paired
+        if (!target.label) target.label = pk.pattern.name;
+        if (k > 0) state.designs.push(target);
+      });
       renderPatterns();
     });
   }
