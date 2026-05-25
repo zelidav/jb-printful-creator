@@ -229,6 +229,18 @@ app.get('/api/drop-patterns', (req, res) => {
   res.json({ items });
 });
 
+// Pickable logo library (in addition to the per-strain auto-pairing and manual upload).
+const LOGO_LIBRARY = [
+  { label: 'Graffiti Icon (JB)', file: 'logos/graffiti-icon.png' },
+  { label: 'Indica Logo', file: 'drops/ny-2026-drop-1/indica_logo.png' },
+  { label: 'Sativa Logo', file: 'drops/ny-2026-drop-1/sativa_logo.png' },
+  { label: 'Hybrid Logo', file: 'drops/ny-2026-drop-1/hybrid_logo.png' },
+];
+app.get('/api/logos', (req, res) => {
+  const base = `https://storage.googleapis.com/${UPLOAD_BUCKET}`;
+  res.json({ items: LOGO_LIBRARY.map(l => ({ label: l.label, file: l.file, mime: 'image/png', url: `${base}/${l.file}?v=${DROP_ART_VERSION}` })) });
+});
+
 app.post('/api/ingest-url', async (req, res) => {
   const { url, filename } = req.body || {};
   if (!url || !/^https?:\/\//.test(url)) return res.status(400).json({ error: 'url required' });
@@ -255,13 +267,14 @@ app.post('/api/jobs', (req, res) => {
   if (!Array.isArray(spec?.products) || !Array.isArray(spec?.patterns) || !spec.patterns.length) {
     return res.status(400).json({ error: 'products[] and patterns[] required' });
   }
-  // Backwards-compat: top-level spec.logo applies to all patterns if patterns don't have their own
+  // Each design needs a pattern OR a logo (or both). Logo may be per-design or a shared top-level one.
   for (const p of spec.patterns) {
-    const lg = p.logo || spec.logo;
-    if (!lg?.fileId || !lg?.url) {
-      return res.status(400).json({ error: `each pattern must have a paired logo (missing on "${p.label || 'unnamed'}")` });
+    p.logo = p.logo || spec.logo || null;
+    const hasPattern = p.fileId && p.url;
+    const hasLogo = p.logo?.fileId && p.logo?.url;
+    if (!hasPattern && !hasLogo) {
+      return res.status(400).json({ error: `each design needs a pattern or a logo (missing on "${p.label || 'unnamed'}")` });
     }
-    p.logo = lg;
   }
   const job = createJob(spec);
   res.json({ id: job.id });
@@ -439,6 +452,18 @@ function isEmbroideryOnly(placementNames) {
 
 async function buildFilesForVariant(prod, pat, detail, logo) {
   const recipe = LOGO_RECIPES[prod.id] || (logo ? { kind: 'composite', gravity: 'center', scale: 0.25 } : null);
+  const hasPattern = !!(pat && pat.url && pat.fileId);
+
+  // ---------- LOGO-ONLY (no pattern): clean logo on the display side, no background fill ----------
+  if (!hasPattern && logo && !isEmbroideryOnly(detail.placementNames)) {
+    const usable = detail.placementNames.filter(p => placementRole(p) !== 'skip');
+    const spot = usable.find(p => /front/i.test(p)) || usable.find(p => placementRole(p) === 'logo') || usable[0] || detail.placementNames[0] || 'default';
+    const ld = await imgDimsCached(logo.url, logo.fileId);
+    const a = detail.dims[spot];
+    const f = { type: spot, id: logo.fileId, srcUrl: logo.url, fit: 'contain', fraction: 0.6 };
+    if (a?.width && a?.height) f.position = containBox(a.width, a.height, ld?.width, ld?.height, 0.6);
+    return [f];
+  }
 
   // ---------- EMBROIDERY-ONLY (hats, embroidered patches) ----------
   if (isEmbroideryOnly(detail.placementNames)) {
@@ -676,7 +701,8 @@ async function runJob(job) {
   const { products, patterns, retailPrices = {} } = job.spec;
 
   for (const pat of patterns) {
-    const patLogo = pat.logo; // each pattern carries its own paired logo
+    const patLogo = pat.logo; // each design carries its own paired logo (may be the only art)
+    const primaryUrl = pat.url || patLogo?.url; // logo-only designs have no pattern
     for (const prod of products) {
       const label = `${prod.title || prod.id} / ${pat.label}`;
       emit(job, { type: 'item-start', label });
@@ -692,7 +718,10 @@ async function runJob(job) {
           if (f.options) o.options = f.options;
           return o;
         });
-        const sync_variants = variants.map(v => ({
+        // Printful caps a sync product at 100 variants (big tees exceed this) — cap to avoid a hard fail.
+        const capped = variants.slice(0, 100);
+        if (variants.length > 100) emit(job, { type: 'item-info', label, note: `capped ${variants.length}→100 variants (Printful limit)` });
+        const sync_variants = capped.map(v => ({
           variant_id: v.id,
           retail_price: retailPrices[prod.id] || prod.retail || '29.00',
           files: printfulFiles,
@@ -700,7 +729,7 @@ async function runJob(job) {
         const name = `${prod.title || `Product ${prod.id}`} - ${pat.label}`;
         const r = await printful.post('/store/products', {
           // is_ignored = false → visible/live in the store (appears in Printful + on the quickshop)
-          sync_product: { name, thumbnail: pat.url, is_ignored: false },
+          sync_product: { name, thumbnail: primaryUrl, is_ignored: false },
           sync_variants,
         });
         if (r.status !== 200) {
@@ -713,11 +742,11 @@ async function runJob(job) {
         emit(job, { type: 'item-created', label, sync_id: syncId });
 
         // Auto-generate mockup + set as clean hero image
-        let thumbUrl = pat.url;
+        let thumbUrl = primaryUrl;
         try {
           const v0 = variants[0]?.id;
           if (v0) {
-            const perm = await generateAndSetThumbnail(prod.id, v0, files, pat.url, detail, syncId, patLogo?.url);
+            const perm = await generateAndSetThumbnail(prod.id, v0, files, primaryUrl, detail, syncId, patLogo?.url);
             if (perm) thumbUrl = perm;
           }
         } catch (e) {

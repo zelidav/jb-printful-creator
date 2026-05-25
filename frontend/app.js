@@ -335,6 +335,48 @@ async function openDropPicker(onPickMany) {
   };
 }
 
+let logoLibCache = null;
+async function fetchLogos() {
+  if (!logoLibCache) { const r = await api('/api/logos'); logoLibCache = r.items || []; }
+  return logoLibCache;
+}
+
+// Single-select logo picker (the shared logo library — graffiti icon + strain logos).
+async function openLogoPicker(onPick) {
+  const items = await fetchLogos();
+  const modal = document.createElement('div');
+  modal.className = 'drop-modal';
+  modal.innerHTML = `
+    <div class="drop-modal-inner">
+      <div class="drop-modal-head"><h2>Logos</h2><button class="drop-close">×</button></div>
+      <div class="drop-modal-body"><div class="drop-grid">
+        ${items.map((it, i) => `
+          <div class="drop-card logo-card" data-idx="${i}">
+            <img src="${it.url}" alt="${it.label}">
+            <div class="drop-label">${it.label}</div>
+          </div>`).join('')}
+      </div></div>
+    </div>`;
+  document.body.appendChild(modal);
+  const close = () => modal.remove();
+  modal.querySelector('.drop-close').onclick = close;
+  modal.onclick = e => { if (e.target === modal) close(); };
+  modal.querySelectorAll('.drop-card').forEach(card => {
+    card.onclick = async () => {
+      const it = items[parseInt(card.dataset.idx)];
+      card.classList.add('loading');
+      card.insertAdjacentHTML('beforeend', '<div class="loading-overlay">Ingesting…</div>');
+      try {
+        const data = await ingestUrlAsPattern({ url: it.url, file: it.file.split('/').pop(), label: it.label });
+        close();
+        onPick(data);
+      } catch (err) {
+        card.querySelector('.loading-overlay').textContent = 'Failed: ' + err.message;
+      }
+    };
+  });
+}
+
 function dpiClass(dim, role) {
   // role: 'pattern' (needs ~2000) or 'logo' (needs ~800)
   const min = role === 'logo' ? 800 : 2000;
@@ -403,7 +445,7 @@ function renderUploadCell(role, design, idx) {
   } else {
     const browseHtml = role === 'pattern'
       ? `<button class="browse-drops" type="button" style="margin-top:6px;font-size:11px;padding:4px 8px;">Browse JBD drops</button>`
-      : '';
+      : `<button class="browse-logos" type="button" style="margin-top:6px;font-size:11px;padding:4px 8px;">Browse logos</button>`;
     cell.innerHTML = `
       <div class="label">${role}</div>
       <div class="hint">Pick a ${role} (drop or click)</div>
@@ -424,6 +466,11 @@ function renderUploadCell(role, design, idx) {
         if (!target.label) target.label = pk.pattern.name;
         if (k > 0) state.designs.push(target);
       });
+      renderPatterns();
+    });
+    const logoBtn = cell.querySelector('.browse-logos');
+    if (logoBtn) logoBtn.onclick = () => openLogoPicker(data => {
+      state.designs[idx].logo = data;
       renderPatterns();
     });
   }
@@ -466,7 +513,7 @@ function renderPatterns() {
 // ---------- REVIEW ----------
 async function renderReview() {
   const sel = Array.from(state.selected.values());
-  const pats = state.designs.filter(d => d.pattern?.fileId && d.logo?.fileId);
+  const pats = state.designs.filter(d => d.pattern?.fileId || d.logo?.fileId);
 
   // Pre-fetch wrap info for selected products
   $('#review-summary').innerHTML = '<div class="muted">Inspecting products for wrap-around layouts...</div>';
@@ -491,13 +538,13 @@ async function renderReview() {
         ${pats.map(d => `
           <div class="design-chip">
             <div class="design-chip-imgs">
-              <img src="${d.pattern.dataUrl}" alt="" title="pattern">
-              <img src="${d.logo.dataUrl}" class="logo" alt="" title="logo">
+              <img src="${(d.pattern || d.logo).dataUrl}" alt="" title="${d.pattern ? 'pattern' : 'logo'}">
+              ${d.pattern && d.logo ? `<img src="${d.logo.dataUrl}" class="logo" alt="" title="logo">` : ''}
             </div>
-            <div class="design-chip-label">${d.label || d.pattern.name}</div>
+            <div class="design-chip-label">${d.label || d.pattern?.name || d.logo?.name || 'Design'}${!d.pattern ? ' (logo only)' : !d.logo ? ' (pattern only)' : ''}</div>
           </div>`).join('')}
       </div>
-    </div>` : `<div class="review-block"><p class="msg error">No complete designs yet — go back to Step 2 and add a pattern + logo.</p></div>`;
+    </div>` : `<div class="review-block"><p class="msg error">No designs yet — go back to Step 2 and add a pattern and/or a logo.</p></div>`;
 
   // Products grid — WITH images
   const productsHtml = `
@@ -564,11 +611,10 @@ async function renderReview() {
 // ---------- RUN ----------
 $('#start-btn').onclick = async () => {
   const sel = Array.from(state.selected.values());
-  const designs = state.designs.filter(d => d.pattern?.fileId && d.logo?.fileId);
+  // A design is valid with a pattern, a logo, or both.
+  const designs = state.designs.filter(d => d.pattern?.fileId || d.logo?.fileId);
   if (!sel.length) return alert('Select at least one product');
-  if (!designs.length) return alert('Add at least one design — both a pattern AND a logo per design');
-  const incomplete = state.designs.filter(d => (d.pattern && !d.logo) || (!d.pattern && d.logo));
-  if (incomplete.length) return alert('One or more designs has only a pattern or only a logo. Complete or remove them.');
+  if (!designs.length) return alert('Add at least one design — a pattern, a logo, or both');
 
   $$('.steps button').forEach(x => x.classList.remove('active'));
   $$('.step').forEach(x => x.classList.remove('active'));
@@ -584,10 +630,10 @@ $('#start-btn').onclick = async () => {
     body: JSON.stringify({
       products: sel.map(p => ({ id: p.id, title: p.title })),
       patterns: designs.map(d => ({
-        label: d.label || d.pattern.name,
-        fileId: d.pattern.fileId,
-        url: d.pattern.url,
-        logo: { fileId: d.logo.fileId, url: d.logo.url, label: d.logo.name },
+        label: d.label || d.pattern?.name || d.logo?.name || 'Design',
+        fileId: d.pattern?.fileId || null,
+        url: d.pattern?.url || null,
+        logo: d.logo ? { fileId: d.logo.fileId, url: d.logo.url, label: d.logo.name } : null,
       })),
       wrapChoices: Object.fromEntries(state.wrapChoices),
     }),
