@@ -317,7 +317,12 @@ async function getCatalogDetail(catalogId) {
       throw new Error(`Printful detail for catalog #${catalogId} failed (info ${info.status}, printfiles ${pfRes.status}): ${JSON.stringify(info.body?.error || pfRes.body?.error || info.body?.result).slice(0, 200)}`);
     }
     const pf = pfRes.body?.result || {};
-    const placementNames = Object.keys(pf.available_placements || {});
+    const available = Object.keys(pf.available_placements || {});
+    // Some products expose PRINT placements only in product.files (not in mockup available_placements) —
+    // e.g. front_dtf_hat on a foam trucker. Merge those in so routing PREFERS print over embroidery.
+    const fileTypes = (info.body?.result?.product?.files || []).map(f => f.type).filter(Boolean);
+    const printFileTypes = fileTypes.filter(t => !/^embroidery_/.test(t) && !['preview', 'mockup', 'default'].includes(t));
+    const placementNames = [...new Set([...available, ...printFileTypes])];
     return {
       info: info.body?.result || null,
       placementNames,
@@ -333,7 +338,7 @@ const SKIP_PLACEMENT = /^(label_|inside_label|branding)/i;
 //   logo    → small branding spots (sleeve, chest, pocket): drop the clean logo here
 //   skip    → labels / inside / embroidery: we don't fill these from raster artwork
 //   pattern → main body & canvas panels (front, back, default, all-over): the pattern is the statement
-const LOGO_SPOT = /(sleeve|chest|breast|pocket|cuff|nape|collar|hip)/i;
+const LOGO_SPOT = /(sleeve|chest|breast|pocket|cuff|nape|collar|hip|hat|cap|beanie|visor)/i;
 function placementRole(p) {
   if (SKIP_PLACEMENT.test(p) || /^(embroidery_|inside|neck)/i.test(p)) return 'skip';
   if (LOGO_SPOT.test(p)) return 'logo';
@@ -537,6 +542,17 @@ async function buildFilesForVariant(prod, pat, detail, logo) {
       const a = detail.dims[p] || {};
       return { type: p, id: logo.fileId, position: containBox(a.width, a.height, ldim?.width, ldim?.height, 0.8), srcUrl: logo.url, fit: 'contain', fraction: 0.8 };
     }));
+  }
+
+  // (A2) Branding-only blanks (caps/hats — a single front print spot, no body panel to pattern):
+  //      print a CLEAN logo, no pattern. (front_dtf_hat etc. — print preferred over embroidery.)
+  if (logo && logoSpots.length && !mainSpots.length) {
+    return logoSpots.map(p => {
+      const a = detail.dims[p];
+      const f = { type: p, id: logo.fileId, srcUrl: logo.url, fit: 'contain', fraction: 0.9 };
+      if (a?.width && a?.height) f.position = containBox(a.width, a.height, ldim?.width, ldim?.height, 0.9);
+      return f;
+    });
   }
 
   // (B) All-over / single-surface items with NO small branding spot (swimwear, totes, cases…):
