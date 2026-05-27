@@ -576,6 +576,19 @@ async function buildFilesForVariant(prod, pat, detail, logo) {
     }));
   }
 
+  // (A1.5) All-over bag with a dedicated POCKET panel (crossbody, utility bags): put the CLEAN logo on
+  // the pocket and the pattern on every other panel — the logo never fights the busy front art. The
+  // pocket is a physically separate panel, so it's a logo home regardless of size (unlike (A), which
+  // only uses small accent spots). Without this, the logo got merged dead-center over the pattern.
+  const pocketSpots = usable.filter(p => /pocket/i.test(p)); // inside_pocket already classed 'skip'
+  if (logo && pocketSpots.length && mainSpots.length) {
+    return Promise.all(usable.map(async p => {
+      if (!pocketSpots.includes(p)) return patFile(p);
+      const a = detail.dims[p] || {};
+      return { type: p, id: logo.fileId, position: containBox(a.width, a.height, ldim?.width, ldim?.height, 0.7), srcUrl: logo.url, fit: 'contain', fraction: 0.7 };
+    }));
+  }
+
   // (A2) Single front print spot, no dedicated body panel (caps/hats — front_dtf_hat etc.):
   //   - pattern selected → fill the front with the PATTERN (tiled if covering would zoom a motif up,
   //     else cover), compositing the logo on top so the strain art actually prints. Previously this
