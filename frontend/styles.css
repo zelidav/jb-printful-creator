@@ -109,6 +109,17 @@ main { padding: 0 24px 40px; }
 .design-slot .upload-cell .dim.bad { color: var(--danger); }
 .design-slot .remove-design { margin-top: 12px; font-size: 11px; }
 
+.design-instructions { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.design-instructions .instr-row { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+.design-instructions label { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.design-instructions input, .design-instructions select, .design-instructions textarea {
+  width: 100%; margin-top: 4px; padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 5px; color: var(--fg); font: inherit; box-sizing: border-box;
+}
+.design-instructions textarea { resize: vertical; text-transform: none; }
+.design-instructions .instr-hint { margin-top: 6px; font-size: 11px; }
+@media (max-width: 560px) { .design-instructions .instr-row { grid-template-columns: 1fr; } }
+
 .step-title { margin: 0 0 4px; font-size: 16px; }
 .step-help { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
 .step-actions { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }

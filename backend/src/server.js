@@ -4,7 +4,8 @@ import multer from 'multer';
 import { Storage } from '@google-cloud/storage';
 import { pf } from './printful.js';
 import { memo } from './cache.js';
-import { classifyPlacements, buildShoeFiles, fitToCanvas, dimsFromPrintfiles, getPrimaryColor, solidWithLogo, compositeLogo, imageDims, tileToCanvas, dominantColors } from './wrap.js';
+import { classifyPlacements, buildShoeFiles, fitToCanvas, dimsFromPrintfiles, getPrimaryColor, solidWithLogo, compositeLogo, imageDims, tileToCanvas, dominantColors, compositeText } from './wrap.js';
+import { regenerateArt } from './aiart.js';
 import { createJob, getJob, emit, subscribe } from './jobs.js';
 import { attachShopRoutes } from './shop.js';
 import { attachTemplateRoutes } from './templates.js';
@@ -13,6 +14,7 @@ const PORT = parseInt(process.env.PORT || '8080');
 const TOKEN = process.env.PRINTFUL_TOKEN;
 const STORE_ID = process.env.STORE_ID;
 const APP_PASSWORD = process.env.APP_PASSWORD;
+const REPLICATE_TOKEN = process.env.REPLICATE_API_TOKEN; // for AI design notes (google/nano-banana)
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*';
 const UPLOAD_BUCKET = process.env.UPLOAD_BUCKET || 'jb-printful-creator-uploads';
 
@@ -574,15 +576,35 @@ async function buildFilesForVariant(prod, pat, detail, logo) {
     }));
   }
 
-  // (A2) Branding-only blanks (caps/hats — a single front print spot, no body panel to pattern):
-  //      print a CLEAN logo, no pattern. (front_dtf_hat etc. — print preferred over embroidery.)
-  if (logo && logoSpots.length && !mainSpots.length) {
-    return logoSpots.map(p => {
-      const a = detail.dims[p];
-      const f = { type: p, id: logo.fileId, srcUrl: logo.url, fit: 'contain', fraction: 0.9 };
-      if (a?.width && a?.height) f.position = containBox(a.width, a.height, ldim?.width, ldim?.height, 0.9);
-      return f;
-    });
+  // (A2) Single front print spot, no dedicated body panel (caps/hats — front_dtf_hat etc.):
+  //   - pattern selected → fill the front with the PATTERN (tiled if covering would zoom a motif up,
+  //     else cover), compositing the logo on top so the strain art actually prints. Previously this
+  //     always dropped a bare logo and silently ignored the pattern (the "all hats are logo-only" bug).
+  //   - logo only        → clean logo on the front, no background fill.
+  if (logoSpots.length && !mainSpots.length) {
+    if (hasPattern) {
+      const logoOpts = { xFrac: 0.5, yFrac: 0.5, scale: 0.4 };
+      return Promise.all(logoSpots.map(async p => {
+        const a = detail.dims[p] || {};
+        if (coverScaleOf(p) > 1.2 && a.width && a.height) {
+          const tp = await tiledPanelFile(pat, a.width, a.height, logo ? { logo, logoOpts } : {});
+          return { type: p, id: tp.id, position: exactBox(a.width, a.height), srcUrl: tp.url, fit: 'exact' };
+        }
+        if (logo) {
+          const merged = await mergeLogoOntoPattern(pat, logo, prod.id, logoOpts);
+          return { type: p, id: merged.id, position: coverBox(a.width, a.height, pdim?.width, pdim?.height) || undefined, srcUrl: merged.url, fit: 'cover' };
+        }
+        return patFile(p);
+      }));
+    }
+    if (logo) {
+      return logoSpots.map(p => {
+        const a = detail.dims[p];
+        const f = { type: p, id: logo.fileId, srcUrl: logo.url, fit: 'contain', fraction: 0.9 };
+        if (a?.width && a?.height) f.position = containBox(a.width, a.height, ldim?.width, ldim?.height, 0.9);
+        return f;
+      });
+    }
   }
 
   // (B) All-over / single-surface items with NO small branding spot (swimwear, totes, cases…):
@@ -695,17 +717,67 @@ async function generateAndSetThumbnail(catalogId, variantId, files, patUrl, deta
   return permUrl;
 }
 
+// Host an edited-art buffer on GCS (full-res, for our sharp re-fetch) and ingest it into Printful
+// (for sync_variants). Returns { id, url } where url is the raw GCS object.
+async function hostEditedArt(buf, label) {
+  const safe = (label || 'design').replace(/[^a-z0-9]+/gi, '_');
+  const publicUrl = await hostOnGcs(buf, `${safe}_edited.jpg`, 'image/jpeg');
+  const r = await printful.post('/files', { type: 'default', url: publicUrl, filename: `${safe}_edited.jpg`, visible: true });
+  if (r.status !== 200) throw new Error('edited-art upload failed: ' + JSON.stringify(r.body).slice(0, 200));
+  return { id: r.body.result.id, url: publicUrl };
+}
+
+// Apply the user's per-design instructions (run ONCE per design, before products are built):
+//   notes → AI-regenerate the art with google/nano-banana
+//   text  → burn the text onto the art with sharp
+// Edits the PRIMARY art (the pattern if present, else the logo) and re-points the design at the
+// new Printful file. Throws loud on failure so the caller can fail the design instead of silently
+// creating products with un-edited art.
+async function applyDesignEdits(pat, job) {
+  const notes = (pat.notes || '').trim();
+  const text = (pat.text || '').trim();
+  if (!notes && !text) return;
+  const target = (pat.url && pat.fileId) ? pat : pat.logo; // pattern art, or logo for logo-only designs
+  if (!target?.url) return;
+
+  let buf = null;
+  if (notes) {
+    emit(job, { type: 'edit', label: pat.label, step: 'ai-regenerate' });
+    buf = await regenerateArt(target.url, notes, { token: REPLICATE_TOKEN });
+  }
+  if (text) {
+    emit(job, { type: 'edit', label: pat.label, step: 'add-text' });
+    if (!buf) buf = await fetchPatternBuf(target.url);
+    buf = await compositeText(buf, text, { position: pat.textPos || 'top', color: pat.textColor || '#ffffff' });
+  }
+  const uploaded = await hostEditedArt(buf, pat.label);
+  target.fileId = uploaded.id;
+  target.url = uploaded.url;
+  emit(job, { type: 'edit-ok', label: pat.label, url: uploaded.url });
+}
+
 async function runJob(job) {
   job.status = 'running';
   emit(job, { type: 'start', total: job.spec.products.length * job.spec.patterns.length });
   const { products, patterns, retailPrices = {} } = job.spec;
 
   for (const pat of patterns) {
+    // Apply per-design instructions (AI notes + added text) ONCE, before any product is built.
+    // If the edit fails, fail the whole design loudly rather than create products with un-edited art.
+    let editError = null;
+    try { await applyDesignEdits(pat, job); }
+    catch (e) { editError = String(e); emit(job, { type: 'edit-fail', label: pat.label, error: editError }); }
+
     const patLogo = pat.logo; // each design carries its own paired logo (may be the only art)
     const primaryUrl = pat.url || patLogo?.url; // logo-only designs have no pattern
     for (const prod of products) {
       const label = `${prod.title || prod.id} / ${pat.label}`;
       emit(job, { type: 'item-start', label });
+      if (editError) {
+        job.items.push({ label, ok: false, error: `design edit failed: ${editError}` });
+        emit(job, { type: 'item-fail', label, error: `design edit failed: ${editError}` });
+        continue;
+      }
       try {
         const detail = await getCatalogDetail(prod.id);
         emit(job, { type: 'item-info', label, wrap: detail.wrap.kind, placements: detail.placementNames });

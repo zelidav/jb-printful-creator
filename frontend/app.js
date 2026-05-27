@@ -5,7 +5,7 @@ const state = {
   catalog: [],
   selected: new Map(),  // catalog_id -> product
   designs: [           // up to 3 designs, each with a pattern + matching logo
-    { label: '', pattern: null, logo: null },
+    { label: '', pattern: null, logo: null, text: '', textPos: 'top', textColor: '#ffffff', notes: '' },
   ],
   wrapInfo: new Map(),  // catalog_id -> { wrap, placements, templates }
   wrapChoices: new Map(), // catalog_id -> 'tile' | 'mirror' | 'separate'
@@ -426,8 +426,8 @@ function ensureSlots() {
   // Keep one trailing empty slot so more designs can always be added (multiselect can add many).
   const MAX = 24;
   const last = state.designs[state.designs.length - 1];
-  if (state.designs.length < MAX && last && (last.pattern || last.logo || last.label)) {
-    state.designs.push({ label: '', pattern: null, logo: null });
+  if (state.designs.length < MAX && last && (last.pattern || last.logo || last.label || last.text || last.notes)) {
+    state.designs.push({ label: '', pattern: null, logo: null, text: '', textPos: 'top', textColor: '#ffffff', notes: '' });
   }
 }
 
@@ -460,7 +460,7 @@ function renderUploadCell(role, design, idx) {
     if (browseBtn) browseBtn.onclick = () => openDropPicker(picks => {
       // First pick fills this slot; the rest are appended as their own designs.
       picks.forEach((pk, k) => {
-        const target = k === 0 ? state.designs[idx] : { label: '', pattern: null, logo: null };
+        const target = k === 0 ? state.designs[idx] : { label: '', pattern: null, logo: null, text: '', textPos: 'top', textColor: '#ffffff', notes: '' };
         target.pattern = pk.pattern;
         if (pk.logo) target.logo = pk.logo;  // strain logo auto-paired
         if (!target.label) target.label = pk.pattern.name;
@@ -498,11 +498,45 @@ function renderPatterns() {
     uploadRow.appendChild(renderUploadCell('logo', d, i));
     slot.appendChild(uploadRow);
 
+    // Per-design instructions: precise text overlay + free-form AI notes.
+    const instr = document.createElement('div');
+    instr.className = 'design-instructions';
+    instr.innerHTML = `
+      <div class="instr-row">
+        <label class="instr-text">Add text to design
+          <input type="text" class="d-text" placeholder="e.g. JEROME BAKER" value="${(d.text || '').replace(/"/g, '&quot;')}">
+        </label>
+        <label class="instr-pos">Position
+          <select class="d-textpos">
+            <option value="top">Top</option>
+            <option value="center">Center</option>
+            <option value="bottom">Bottom</option>
+          </select>
+        </label>
+        <label class="instr-color">Color
+          <select class="d-textcolor">
+            <option value="#ffffff">White</option>
+            <option value="#000000">Black</option>
+            <option value="#ffd400">Gold</option>
+            <option value="#ff3b30">Red</option>
+          </select>
+        </label>
+      </div>
+      <label class="instr-notes">Design notes (AI — regenerates the art)
+        <textarea class="d-notes" rows="2" placeholder="e.g. make the background warmer green, bolder motifs, add subtle smoke">${d.notes || ''}</textarea>
+      </label>
+      <div class="instr-hint muted">Text is burned onto the print exactly as typed. Notes run the art through AI (nano-banana) before printing — slower, and applied once per design.</div>`;
+    instr.querySelector('.d-text').oninput = e => { d.text = e.target.value; };
+    const posSel = instr.querySelector('.d-textpos'); posSel.value = d.textPos || 'top'; posSel.onchange = e => { d.textPos = e.target.value; };
+    const colSel = instr.querySelector('.d-textcolor'); colSel.value = d.textColor || '#ffffff'; colSel.onchange = e => { d.textColor = e.target.value; };
+    instr.querySelector('.d-notes').oninput = e => { d.notes = e.target.value; };
+    slot.appendChild(instr);
+
     if (isFilled && state.designs.length > 1) {
       const rm = document.createElement('button');
       rm.className = 'remove-design';
       rm.textContent = 'Remove this design';
-      rm.onclick = () => { state.designs.splice(i, 1); if (state.designs.length === 0) state.designs = [{ label: '', pattern: null, logo: null }]; renderPatterns(); };
+      rm.onclick = () => { state.designs.splice(i, 1); if (state.designs.length === 0) state.designs = [{ label: '', pattern: null, logo: null, text: '', textPos: 'top', textColor: '#ffffff', notes: '' }]; renderPatterns(); };
       slot.appendChild(rm);
     }
 
@@ -634,6 +668,10 @@ $('#start-btn').onclick = async () => {
         fileId: d.pattern?.fileId || null,
         url: d.pattern?.url || null,
         logo: d.logo ? { fileId: d.logo.fileId, url: d.logo.url, label: d.logo.name } : null,
+        text: (d.text || '').trim() || null,
+        textPos: d.textPos || 'top',
+        textColor: d.textColor || '#ffffff',
+        notes: (d.notes || '').trim() || null,
       })),
       wrapChoices: Object.fromEntries(state.wrapChoices),
     }),

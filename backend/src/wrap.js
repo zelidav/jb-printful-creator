@@ -104,6 +104,46 @@ export async function compositeLogo(patternBuf, logoBuf, { gravity = 'center', s
   return sharp(patternBuf).composite([{ input: resized, gravity }]).png().toBuffer();
 }
 
+// Burn one or more lines of text onto a design (the user's "add text to design"). Aspect-safe:
+// the text is rendered into an SVG sized to the base image and composited at top/center/bottom,
+// with a contrasting outline so it stays legible over a busy pattern. Keeps the input's format
+// (JPEG patterns stay JPEG; PNG logos keep their alpha).
+// `position` accepts a vertical and optional horizontal token, e.g. 'top', 'bottom-right',
+// 'center', 'bottom left'. Vertical defaults to top, horizontal to center.
+export async function compositeText(baseBuf, text, { position = 'top', color = '#ffffff', stroke = '#000000' } = {}) {
+  const lines = String(text || '').split('\n').map(s => s.trim()).filter(Boolean).slice(0, 4);
+  if (!lines.length) return baseBuf;
+  const meta = await sharp(baseBuf).metadata();
+  const W = meta.width || 1200, H = meta.height || 1200;
+  const pos = String(position).toLowerCase();
+  const vert = /bottom/.test(pos) ? 'bottom' : /center|middle/.test(pos) ? 'center' : 'top';
+  const horiz = /right/.test(pos) ? 'right' : /left/.test(pos) ? 'left' : 'center';
+  // Size the font from the LONGEST line (rough monospace estimate). Centered text spans most of the
+  // width (a statement); corner-aligned text is a smaller tag so it actually sits in the corner.
+  const longest = Math.max(...lines.map(l => l.length), 1);
+  const widthFrac = horiz === 'center' ? 0.8 : 0.42;
+  const fontSize = Math.max(20, Math.min(Math.round(W * 0.12), Math.round(H * 0.28), Math.round((W * widthFrac) / (longest * 0.6))));
+  const lineH = Math.round(fontSize * 1.18);
+  const blockH = lineH * lines.length;
+  const padY = Math.round(H * 0.05), padX = Math.round(W * 0.05);
+  let baseY; // y of the FIRST line's baseline
+  if (vert === 'bottom') baseY = H - padY - blockH + fontSize;
+  else if (vert === 'center') baseY = Math.round(H / 2 - blockH / 2) + fontSize;
+  else baseY = padY + fontSize; // top
+  const anchor = horiz === 'left' ? 'start' : horiz === 'right' ? 'end' : 'middle';
+  const x = horiz === 'left' ? padX : horiz === 'right' ? (W - padX) : Math.round(W / 2);
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const strokeW = Math.max(2, Math.round(fontSize * 0.07));
+  const texts = lines.map((ln, i) =>
+    `<text x="${x}" y="${baseY + i * lineH}" text-anchor="${anchor}" ` +
+    `font-family="Liberation Sans, Arial, DejaVu Sans, sans-serif" font-weight="900" ` +
+    `font-size="${fontSize}" fill="${color}" stroke="${stroke}" stroke-width="${strokeW}" ` +
+    `paint-order="stroke" stroke-linejoin="round">${esc(ln)}</text>`).join('');
+  const svg = Buffer.from(`<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">${texts}</svg>`);
+  const out = sharp(baseBuf).composite([{ input: svg, top: 0, left: 0 }]);
+  return /^jpe?g$/i.test(meta.format || '') ? out.jpeg({ quality: 90 }).toBuffer() : out.png().toBuffer();
+}
+
 // Pixel dimensions of an image buffer (used to fit designs into print areas without distortion).
 export async function imageDims(buf) {
   const m = await sharp(buf).metadata();
